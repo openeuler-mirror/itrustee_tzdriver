@@ -1,0 +1,69 @@
+/*
+ * tc_ns_log.h
+ *
+ * log func declaration
+ *
+ * Copyright (c) 2012-2021 Huawei Technologies Co., Ltd.
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ */
+#ifndef TC_NS_LOG_H
+#define TC_NS_LOG_H
+
+#include <linux/version.h>
+#if (KERNEL_VERSION(4, 14, 0) <= LINUX_VERSION_CODE)
+#include <linux/sched/mm.h>
+#endif
+#include <linux/printk.h>
+enum {
+	TZ_DEBUG_VERBOSE = 0,
+	TZ_DEBUG_DEBUG,
+	TZ_DEBUG_INFO,
+	TZ_DEBUG_WARN,
+	TZ_DEBUG_ERROR,
+};
+#define MOD_TEE "tzdriver"
+
+#define TEE_USR_LOG_MASK 3
+#define TEE_LOG_MASK TEE_USR_LOG_MASK
+
+#define tlogv(fmt, args...) \
+do { \
+	if (TZ_DEBUG_VERBOSE >= TEE_LOG_MASK) \
+		pr_info("([%s] %i, %s)%s: " fmt, MOD_TEE, current->pid, current->comm, __func__, ## args); \
+} while (0)
+
+
+#define tlogd(fmt, args...) \
+do { \
+	if (TZ_DEBUG_DEBUG >= TEE_LOG_MASK) \
+		pr_info("([%s] %i, %s)%s: " fmt, MOD_TEE, current->pid, current->comm, __func__, ## args); \
+} while (0)
+
+
+#define tlogi(fmt, args...) \
+do { \
+	if (TZ_DEBUG_INFO >= TEE_LOG_MASK) \
+		pr_info("([%s] %i, %s)%s: " fmt, MOD_TEE, current->pid, current->comm, __func__, ## args); \
+} while (0)
+
+
+#define tlogw(fmt, args...) \
+do { \
+	if (TZ_DEBUG_WARN >= TEE_LOG_MASK) \
+		pr_warn("([%s] %i, %s)%s: " fmt, MOD_TEE, current->pid, current->comm, __func__, ## args); \
+} while (0)
+
+
+#define tloge(fmt, args...) \
+		pr_err("([%s] %i, %s)%s: " fmt, MOD_TEE, current->pid, current->comm, __func__, ## args)
+
+#endif
