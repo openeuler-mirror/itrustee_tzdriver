@@ -76,10 +76,7 @@ static int32_t teek_read_app(const char *load_file, char **file_buf, uint32_t *f
 	if (ret != TEEC_SUCCESS)
 		tloge("do read app fail\n");
 
-	if (fp != NULL) {
-		filp_close(fp, 0);
-		fp = NULL;
-	}
+	filp_close(fp, 0);
 
 	return ret;
 }
