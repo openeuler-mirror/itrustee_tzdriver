@@ -1037,7 +1037,7 @@ smc_data_free:
 
 static void tc_re_init(const struct device *class_dev)
 {
-	int ret;
+	int ret = 0;
 
 	agent_init();
 
