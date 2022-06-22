@@ -3,7 +3,7 @@
  *
  * function for base hash operation
  *
- * Copyright (c) 2012-2021 Huawei Technologies Co., Ltd.
+ * Copyright (c) 2012-2022 Huawei Technologies Co., Ltd.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -34,10 +34,6 @@
 #include <linux/sched/mm.h>
 #endif
 
-#ifdef CONFIG_SECURITY_SELINUX
-#include <linux/security.h>
-#endif
-
 #include <securec.h>
 #include "tc_ns_log.h"
 #include "tc_ns_client.h"
@@ -48,44 +44,6 @@
 struct crypto_shash *g_shash_handle;
 bool g_shash_handle_state;
 struct mutex g_shash_handle_lock;
-
-#ifdef CONFIG_SELINUX_ADAPT
-
-int security_context_to_sid(const char *scontext, u32 scontext_len,
-	u32 *out_sid, gfp_t gfp);
-
-int check_proc_selinux_access(struct task_struct *task, const char *context)
-{
-	u32 sid;
-	u32 tid;
-	int rc;
-
-	if (!task || !context)
-		return -EACCES;
-
-	security_task_getsecid(task, &sid);
-	rc = security_context_to_sid(context, strlen(context), &tid, GFP_KERNEL);
-	if (rc) {
-		tloge("convert context to sid failed\n");
-		return rc;
-	}
-
-	if (sid != tid) {
-		tloge("invalid access process judged by selinux side\n");
-		return -EACCES;
-	}
-
-	return EOK;
-}
-
-#else
-
-int check_proc_selinux_access(struct task_struct *task, const char *context)
-{
-	return 0;
-}
-
-#endif
 
 void init_crypto_hash_lock(void)
 {
@@ -146,130 +104,6 @@ int tee_init_shash_handle(char *hash_type)
 }
 /* end: prepare crypto context */
 
-/* begin: Calculate path hash */
-static long pack_path_cert(bool is_hidl_srvc, char *path_cert,
-	unsigned long cert_len)
-{
-	char *dpath = NULL;
-	char *path = NULL;
-	const struct cred *cred = NULL;
-	int message_size;
-
-	path = kmalloc(MAX_PATH_SIZE, GFP_KERNEL);
-	if (ZERO_OR_NULL_PTR((unsigned long)(uintptr_t)path)) {
-		tloge("path kmalloc fail\n");
-		return -EFAULT;
-	}
-
-	dpath = get_proc_dpath(path, MAX_PATH_SIZE);
-	if (IS_ERR_OR_NULL(dpath)) {
-		kfree(path);
-		return -EACCES;
-	}
-
-	get_task_struct(current);
-	cred = koadpt_get_task_cred(current);
-	if (!cred) {
-		tloge("cred is NULL\n");
-		kfree(path);
-		put_task_struct(current);
-		return -EACCES;
-	}
-
-	if (is_hidl_srvc) {
-		message_size = snprintf_s(path_cert, BUF_MAX_SIZE,
-			BUF_MAX_SIZE - 1, "%s%u",  dpath, cred->uid.val);
-	} else {
-		message_size = snprintf_s(path_cert, BUF_MAX_SIZE,
-			BUF_MAX_SIZE - 1, "%s%s%u",
-			current->comm, dpath, cred->uid.val);
-	}
-
-	put_cred(cred);
-	put_task_struct(current);
-	kfree(path);
-
-	return (long)message_size;
-}
-
-static int proc_calc_path_hash(const unsigned char *data, unsigned long data_len,
-	unsigned char *digest, unsigned int dig_len)
-{
-	int rc;
-	size_t ctx_size;
-	size_t desc_size;
-	struct sdesc {
-		struct shash_desc shash;
-		char ctx[];
-	};
-	struct sdesc *desc = NULL;
-	bool check_value = false;
-
-	check_value = (!data_len || dig_len != SHA256_DIGEST_LENTH);
-	if (check_value == true) {
-		tloge("bad parameter len\n");
-		return -EFAULT;
-	}
-
-	if (tee_init_shash_handle("sha256")) {
-		tloge("init tee crypto failed\n");
-		return -EFAULT;
-	}
-
-	ctx_size = crypto_shash_descsize(g_shash_handle);
-	desc_size = sizeof(desc->shash) + ctx_size;
-	if (desc_size < sizeof(desc->shash) || desc_size < ctx_size) {
-		tloge("desc_size flow\n");
-		return -ENOMEM;
-	}
-
-	desc = kzalloc(desc_size, GFP_KERNEL);
-	if (ZERO_OR_NULL_PTR((unsigned long)(uintptr_t)desc)) {
-		tloge("alloc desc failed\n");
-		return -ENOMEM;
-	}
-
-	desc->shash.tfm = g_shash_handle;
-	rc = crypto_shash_digest(&desc->shash, data, data_len, digest);
-
-	kfree(desc);
-	return rc;
-}
-
-int calc_path_hash(bool is_hidl_srvc, unsigned char *digest,
-	unsigned int dig_len)
-{
-	char *path_cert = NULL;
-	int ret;
-	long packet_size;
-
-	if (!digest || dig_len != SHA256_DIGEST_LENTH)
-		return -EFAULT;
-
-	path_cert = kzalloc(BUF_MAX_SIZE, GFP_KERNEL);
-	if (ZERO_OR_NULL_PTR((unsigned long)(uintptr_t)path_cert)) {
-		tloge("ca_cert kmalloc fail\n");
-		return -EFAULT;
-	}
-
-	packet_size = pack_path_cert(is_hidl_srvc, path_cert, BUF_MAX_SIZE);
-	if (packet_size <= 0) {
-		kfree(path_cert);
-		return -EFAULT;
-	}
-
-	ret = proc_calc_path_hash(path_cert, (unsigned long)packet_size,
-		digest, dig_len);
-	if (ret) {
-		kfree(path_cert);
-		return -ret;
-	}
-
-	kfree(path_cert);
-	return EOK;
-}
-/* end: Calculate path hash */
-
 /* begin: Calculate the SHA256 file digest */
 static int prepare_desc(struct sdesc **desc)
 {
@@ -293,6 +127,25 @@ static int prepare_desc(struct sdesc **desc)
 }
 
 #define PINED_PAGE_NUMBER 1
+static int get_proc_user_pages(struct mm_struct *mm, unsigned long start_code,
+    struct page **ptr_page, struct task_struct *cur_struct)
+{
+#if (KERNEL_VERSION(5, 10, 0) <= LINUX_VERSION_CODE)
+    (void)cur_struct;
+    return get_user_pages_remote(mm, start_code, (unsigned long)PINED_PAGE_NUMBER,
+            FOLL_FORCE, ptr_page, NULL, NULL);
+#elif (KERNEL_VERSION(4, 9, 0) <= LINUX_VERSION_CODE)
+        return get_user_pages_remote(cur_struct, mm, start_code, (unsigned long)PINED_PAGE_NUMBER,
+            FOLL_FORCE, ptr_page, NULL, NULL);
+#elif (KERNEL_VERSION(4, 4, 197) <= LINUX_VERSION_CODE)
+        return get_user_pages_locked(cur_struct, mm, start_code, (unsigned long)PINED_PAGE_NUMBER,
+            FOLL_FORCE, ptr_page, NULL);
+#else
+    return get_user_pages_locked(cur_struct, mm, start_code, (unsigned long)PINED_PAGE_NUMBER, 
+        0, 1, ptr_page, NULL);
+#endif
+}
+
 static int update_task_hash(struct mm_struct *mm,
 	struct task_struct *cur_struct, struct shash_desc *shash)
 {
@@ -311,17 +164,7 @@ static int update_task_hash(struct mm_struct *mm,
 
 	while (start_code < end_code) {
 		/* Get a handle of the page we want to read */
-#if (KERNEL_VERSION(4, 9, 0) <= LINUX_VERSION_CODE)
-		rc = get_user_pages_remote(cur_struct, mm, start_code,
-			(unsigned long)PINED_PAGE_NUMBER, FOLL_FORCE,
-			&ptr_page, NULL, NULL);
-#elif (KERNEL_VERSION(4, 4, 197) <= LINUX_VERSION_CODE)
-		rc = get_user_pages_locked(cur_struct, mm, start_code,
-			(unsigned long)PINED_PAGE_NUMBER, FOLL_FORCE, &ptr_page, NULL);
-#else
-		rc = get_user_pages_locked(cur_struct, mm, start_code,
-			(unsigned long)PINED_PAGE_NUMBER, 0, 1, &ptr_page, NULL);
-#endif
+        rc = get_proc_user_pages(mm, start_code, &ptr_page, cur_struct);
 		if (rc != PINED_PAGE_NUMBER) {
 			tloge("get user pages error[0x%x]\n", rc);
 			rc = -EFAULT;
@@ -352,7 +195,7 @@ static int update_task_hash(struct mm_struct *mm,
 }
 
 int calc_task_hash(unsigned char *digest, uint32_t dig_len,
-	struct task_struct *cur_struct)
+	struct task_struct *cur_struct, uint32_t pub_key_len)
 {
 	struct mm_struct *mm = NULL;
 	struct sdesc *desc = NULL;
@@ -374,6 +217,12 @@ int calc_task_hash(unsigned char *digest, uint32_t dig_len,
 		return EOK;
 	}
 
+    if(pub_key_len != sizeof(uint32_t)){
+        tloge("apk need not check!\n");
+        mmput(mm);
+        return EOK;
+    }
+
 	if (prepare_desc(&desc) != EOK) {
 		mmput(mm);
 		return -ENOMEM;
@@ -386,13 +235,13 @@ int calc_task_hash(unsigned char *digest, uint32_t dig_len,
 		goto free_res;
 	}
 
-	down_read(&mm->mmap_sem);
+	down_read(&mm_sem_lock(mm));
 	if (update_task_hash(mm, cur_struct, &desc->shash)) {
-		up_read(&mm->mmap_sem);
+		up_read(&mm_sem_lock(mm));
 		rc = -ENOMEM;
 		goto free_res;
 	}
-	up_read(&mm->mmap_sem);
+	up_read(&mm_sem_lock(mm));
 
 	rc = crypto_shash_final(&desc->shash, digest);
 free_res:

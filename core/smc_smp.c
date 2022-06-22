@@ -3,7 +3,7 @@
  *
  * function for sending smc cmd
  *
- * Copyright (c) 2012-2021 Huawei Technologies Co., Ltd.
+ * Copyright (c) 2012-2022 Huawei Technologies Co., Ltd.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -59,14 +59,14 @@
 #include "teek_ns_client.h"
 #include "mailbox_mempool.h"
 #include "cmdmonitor.h"
-#include "security_auth_enhance.h"
 #include "tlogger.h"
 #include "ko_adapt.h"
 #include "log_cfg_api.h"
 #include "tz_kthread_affinity.h"
 #include "tee_compat_check.h"
+#include "tee_trace_event.h"
+#include "secs_power_ctrl.h"
 
-#define SECS_SUSPEND_STATUS      0xA5A5
 #define PREEMPT_COUNT            10000
 #define HZ_COUNT                 10
 #define IDLED_COUNT              100
@@ -92,6 +92,8 @@
 #define CLEAN_WITHOUT_PM  2
 
 #define MAX_CHAR 0xff
+
+#define MAX_SIQ_NUM 4
 
 /* Current state of the system */
 static uint8_t g_sys_crash;
@@ -153,11 +155,8 @@ static spinlock_t g_pend_lock;
 static DECLARE_WAIT_QUEUE_HEAD(siq_th_wait);
 static DECLARE_WAIT_QUEUE_HEAD(ipi_th_wait);
 static atomic_t g_siq_th_run;
-
-enum {
-	TYPE_CRASH_TA  = 1,
-	TYPE_CRASH_TEE = 2,
-};
+static uint32_t g_siq_queue[MAX_SIQ_NUM];
+DEFINE_MUTEX(g_siq_lock);
 
 enum smc_ops_exit {
 	SMC_OPS_NORMAL   = 0x0,
@@ -202,7 +201,7 @@ union crash_inf {
 static const char *g_hungtask_monitor_list[] = {
 };
 
-#define compile_time_assert(cond, msg) typedef char ASSERT_##msg[(cond) ? 1 : -1]
+#define compile_time_assert(cond, msg) typedef char g_assert_##msg[(cond) ? 1 : -1]
 
 #ifndef CONFIG_BIG_SESSION
 compile_time_assert(sizeof(struct tc_ns_smc_queue) <= PAGE_SIZE,
@@ -233,14 +232,6 @@ static void occupy_setbit_smc_in_doing_entry(int32_t i, int32_t *idx)
 	set_bit(i, (unsigned long *)g_cmd_data->in_bitmap);
 	set_bit(i, (unsigned long *)g_cmd_data->doing_bitmap);
 	*idx = i;
-}
-
-static void occupy_clean_in_doing_entry(int32_t i)
-{
-	acquire_smc_buf_lock(&g_cmd_data->smc_lock);
-	clear_bit(i, (unsigned long *)g_cmd_data->in_bitmap);
-	clear_bit(i, (unsigned long *)g_cmd_data->doing_bitmap);
-	release_smc_buf_lock(&g_cmd_data->smc_lock);
 }
 
 static int occupy_free_smc_in_entry(const struct tc_ns_smc_cmd *cmd)
@@ -290,26 +281,12 @@ get_smc_retry:
 		return -1;
 	}
 
-	if (update_timestamp(&g_cmd_data->in[idx])) {
-		tloge("update timestamp failed!\n");
-		goto clean;
-	}
-	if (update_chksum(&g_cmd_data->in[idx])) {
-		tloge("update chksum failed\n");
-		goto clean;
-	}
-
 	acquire_smc_buf_lock(&g_cmd_data->smc_lock);
 	isb();
 	wmb();
 	clear_bit(idx, (unsigned long *)g_cmd_data->doing_bitmap);
 	release_smc_buf_lock(&g_cmd_data->smc_lock);
 	return idx;
-
-clean:
-	occupy_clean_in_doing_entry(i);
-
-	return -1;
 }
 
 static int reuse_smc_in_entry(uint32_t idx)
@@ -330,14 +307,6 @@ static int reuse_smc_in_entry(uint32_t idx)
 		goto out;
 	}
 	release_smc_buf_lock(&g_cmd_data->smc_lock);
-	if (update_timestamp(&g_cmd_data->in[idx])) {
-		tloge("update timestamp failed!\n");
-		return -1;
-	}
-	if (update_chksum(&g_cmd_data->in[idx])) {
-		tloge("update chksum failed\n");
-		return -1;
-	}
 
 	acquire_smc_buf_lock(&g_cmd_data->smc_lock);
 	isb();
@@ -804,7 +773,9 @@ retry:
 	set_smc_send_arg(&in_param, secret, ops);
 	isb();
 	wmb();
+	tee_trace_add_event(SMC_SEND, 0);
 	send_asm_smc_cmd(&in_param, &out_param);
+	tee_trace_add_event(SMC_DONE, 0);
 	isb();
 	wmb();
 	tlogd("[cpu %d] return val %lx exit_reason %lx ta %lx targ %lx\n",
@@ -827,7 +798,7 @@ retry:
 			secret->exit = SMC_EXIT_ABORT;
 			tloge("receive kill signal\n");
 		} else {
-#ifndef CONFIG_PREEMPT
+#if (!defined(CONFIG_PREEMPT)) || defined(CONFIG_RTOS_PREEMPT_OFF)
 			/* yield cpu to avoid soft lockup */
 			cond_resched();
 #endif
@@ -919,21 +890,50 @@ unsigned long raw_smc_send(uint32_t cmd, phys_addr_t cmd_addr,
 	return x0;
 }
 
-void siq_dump(phys_addr_t mode)
+static void siq_dump(phys_addr_t mode, uint32_t siq_mode)
 {
 	(void)raw_smc_send(TSP_REE_SIQ, mode, 0, false);
+	if (siq_mode == SIQ_DUMP_TIMEOUT) {
+		tz_log_write();
+	} else if (siq_mode == SIQ_DUMP_SHELL) {
 #ifdef CONFIG_TEE_LOG_DUMP_PATH
 	(void)tlogger_store_msg(CONFIG_TEE_LOG_DUMP_PATH,
 		sizeof(CONFIG_TEE_LOG_DUMP_PATH));
 #else
 	tz_log_write();
 #endif
+	}
 	do_cmd_need_archivelog();
+}
+
+static uint32_t get_free_siq_index(void)
+{
+	uint32_t i;
+
+	for (i = 0; i < MAX_SIQ_NUM; i++) {
+		if (g_siq_queue[i] == 0) 
+			return i;
+	}
+
+	return MAX_SIQ_NUM;
+}
+
+static uint32_t get_undo_siq_index(void)
+{
+	uint32_t i;
+
+	for (i = 0; i < MAX_SIQ_NUM; i++) {
+		if (g_siq_queue[i] != 0) 
+			return i;
+	}
+
+	return MAX_SIQ_NUM;
 }
 
 static int siq_thread_fn(void *arg)
 {
 	int ret;
+	uint32_t i;
 
 	while (1) {
 		ret = wait_event_interruptible(siq_th_wait,
@@ -942,8 +942,17 @@ static int siq_thread_fn(void *arg)
 			tloge("wait event interruptible failed!\n");
 			return -EINTR;
 		}
+
+		mutex_lock(&g_siq_lock);
+		do {
+			i = get_undo_siq_index();
+			if (i >= MAX_SIQ_NUM)
+				break;
+			siq_dump((phys_addr_t)(1), g_siq_queue[i]);
+			g_siq_queue[i] = 0;
+		}while(1);
 		atomic_set(&g_siq_th_run, 0);
-		siq_dump((phys_addr_t)(1));
+		mutex_unlock(&g_siq_lock);
 	}
 }
 
@@ -988,11 +997,6 @@ static void upload_audit_event(unsigned int eventindex)
 
 static void cmd_result_check(struct tc_ns_smc_cmd *cmd)
 {
-	if (cmd->ret_val == TEEC_SUCCESS && verify_chksum(cmd)) {
-		cmd->ret_val = TEEC_ERROR_GENERIC;
-		tloge("verify chksum failed\n");
-	}
-
 	if (cmd->ret_val == TEEC_PENDING || cmd->ret_val == TEEC_PENDING2)
 		tlogd("wakeup command %u\n", cmd->event_nr);
 
@@ -1117,16 +1121,6 @@ static void shadow_wo_pm(const void *arg, struct smc_out_params *out_params,
 }
 #endif
 
-static int power_on_cc(void)
-{
-	return 0;
-}
-
-static int power_down_cc(void)
-{
-	return 0;
-}
-
 static void set_preempted_counter(int *n_preempted, int *n_idled,
 	struct pending_entry *pe)
 {
@@ -1134,7 +1128,7 @@ static void set_preempted_counter(int *n_preempted, int *n_idled,
 	(*n_preempted)++;
 
 	if (*n_preempted > PREEMPT_COUNT) {
-		tlogi("%s: retry 10K times on CPU%d\n", __func__, smp_processor_id());
+		tlogd("counter too large: retry 10K times on CPU%d\n", smp_processor_id());
 		*n_preempted = 0;
 	}
 #ifndef CONFIG_PREEMPT
@@ -1240,7 +1234,7 @@ retry_wo_pm:
 			goto clean_wo_pm;
 		} else if (ret == RETRY_WITH_PM) {
 			if (match_ta_affinity(pe))
-				tlogi("set shadow pid %d\n", pe->task->pid);
+				tlogd("set shadow pid %d\n", pe->task->pid);
 			goto retry;
 		}
 	} else {
@@ -1293,6 +1287,7 @@ static int proc_smc_wakeup_ca(pid_t ca, int which)
 		struct pending_entry *pe = find_pending_entry(ca);
 
 		if (!pe) {
+			(void)raw_smc_send(TSP_REE_SIQ, (phys_addr_t)ca, 0, false);
 			tlogd("invalid ca pid=%d for pending entry\n",
 				(int)ca);
 			return -1;
@@ -1322,6 +1317,7 @@ int smc_wakeup_broadcast(void)
 
 int smc_wakeup_ca(pid_t ca)
 {
+	tee_trace_add_event(SPI_WAKEUP, ca);
 	return proc_smc_wakeup_ca(ca, 1);
 }
 
@@ -1334,6 +1330,7 @@ void fiq_shadow_work_func(uint64_t target)
 {
 	struct smc_cmd_ret secret = { SMC_EXIT_MAX, 0, target };
 
+	secs_suspend_status(target);
 	if (power_on_cc()) {
 		tloge("power on cc failed\n");
 		return;
@@ -1621,12 +1618,6 @@ static int set_abort_cmd(int index)
 	g_cmd_data->in[index].operation_h_phys = 0;
 	g_cmd_data->in[index].login_data_phy = 0;
 	g_cmd_data->in[index].login_data_h_addr = 0;
-#ifdef CONFIG_AUTH_ENHANCE
-	g_cmd_data->in[index].token_phys = 0;
-	g_cmd_data->in[index].token_h_phys = 0;
-	g_cmd_data->in[index].params_phys = 0;
-	g_cmd_data->in[index].params_h_phys = 0;
-#endif
 
 	clear_bit(index, (unsigned long *)g_cmd_data->doing_bitmap);
 	release_smc_buf_lock(&g_cmd_data->smc_lock);
@@ -1726,6 +1717,7 @@ static enum pending_t proc_ta_pending(struct pending_entry *pe,
 resleep:
 		cur_timeout = jiffies_to_msecs(step->steps[step->cur]);
 
+		tee_trace_add_event(SMC_SLEEP, 0);
 		if (!wait_event_timeout(pe->wq, atomic_read(&pe->run),
 				step->steps[step->cur])) {
 			if (step->cur < (step->size - 1)) {
@@ -1900,9 +1892,23 @@ bool is_tee_hungtask(struct task_struct *task)
 	return false;
 }
 
-void wakeup_tc_siq(void)
+void wakeup_tc_siq(uint32_t siq_mode)
 {
+	uint32_t i;
+
+	if (siq_mode == 0) 
+		return;
+	
+	mutex_lock(&g_siq_lock);
+	i = get_free_siq_index();
+	if (i >= MAX_SIQ_NUM) {
+		tloge("dump is too frequent\n");
+		mutex_unlock(&g_siq_lock);
+		return;
+	}
+	g_siq_queue[i] = siq_mode;
 	atomic_set(&g_siq_th_run, 1);
+	mutex_unlock(&g_siq_lock);
 	wake_up_interruptible(&siq_th_wait);
 }
 
@@ -2024,27 +2030,19 @@ static int parse_params_from_tee(void)
 	void *buffer = NULL;
 
 	buffer = (void *)(g_cmd_data->in);
-	ret = get_session_root_key((uint32_t *)buffer, ROOT_KEY_BUF_LEN);
-	if (ret) {
-		tloge("get session root key failed\n");
-		return ret;
-	}
-	ret = check_teeos_compat_level((uint32_t *)(buffer + ROOT_KEY_BUF_LEN),
+	ret = check_teeos_compat_level((uint32_t *)buffer,
 		COMPAT_LEVEL_BUF_LEN);
 	if (ret) {
 		tloge("check teeos compatibility failed\n");
-		goto free_mem;
+		return ret;
 	}
 	if (memset_s(buffer, sizeof(g_cmd_data->in),
 		0, sizeof(g_cmd_data->in))) {
 		tloge("Clean the command buffer failed\n");
 		ret = -EFAULT;
-		goto free_mem;
+		return ret;
 	}
 	return 0;
-free_mem:
-	free_root_key();
-	return ret;
 }
 
 int smc_context_init(const struct device *class_dev)
@@ -2087,7 +2085,6 @@ free_siq_worker:
 free_mem:
 	free_page((unsigned long)(uintptr_t)g_cmd_data);
 	g_cmd_data = NULL;
-	free_root_key();
 	return ret;
 }
 
@@ -2120,6 +2117,4 @@ void smc_free_data(void)
 		kthread_stop(g_smc_svc_thread);
 		g_smc_svc_thread = NULL;
 	}
-
-	free_root_key();
 }

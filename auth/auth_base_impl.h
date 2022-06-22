@@ -3,7 +3,7 @@
  *
  * function definition for base hash operation
  *
- * Copyright (c) 2012-2021 Huawei Technologies Co., Ltd.
+ * Copyright (c) 2012-2022 Huawei Technologies Co., Ltd.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -44,7 +44,7 @@ struct sdesc {
 
 int calc_path_hash(bool is_hidl_srvc, unsigned char *digest, unsigned int dig_len);
 int calc_task_hash(unsigned char *digest, uint32_t dig_len,
-	struct task_struct *cur_struct);
+	struct task_struct *cur_struct, uint32_t pub_key_len);
 
 int tee_init_shash_handle(char *hash_type);
 void tee_exit_shash_handle(void);
@@ -53,8 +53,6 @@ struct crypto_shash *get_shash_handle(void);
 void init_crypto_hash_lock(void);
 void mutex_crypto_hash_lock(void);
 void mutex_crypto_hash_unlock(void);
-int check_proc_selinux_access(struct task_struct *ca_task,
-	const char *context);
 
 #else
 

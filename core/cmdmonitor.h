@@ -3,7 +3,7 @@
  *
  * cmdmonitor function declaration
  *
- * Copyright (c) 2012-2021 Huawei Technologies Co., Ltd.
+ * Copyright (c) 2012-2022 Huawei Technologies Co., Ltd.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -25,11 +25,16 @@
 #define TASK_COMM_LEN 16
 #endif
 
+enum {
+	TYPE_CRASH_TA = 1,
+	TYPE_CRASH_TEE = 2,
+};
+
 /*
  * when cmd execute more than 25s in tee,
  * it will be terminated when CA is killed
  */
-#define CMD_MAX_EXECUTE_TIME 25U
+#define CMD_MAX_EXECUTE_TIME 10U
 #define S_TO_MS 1000
 #define S_TO_US 1000000
 
@@ -44,6 +49,8 @@ struct time_spec {
 struct cmd_monitor {
 	struct list_head list;
 	struct time_spec sendtime;
+	struct time_spec lasttime;
+	int32_t timer_index;
 	int count;
 	bool returned;
 	bool is_reported;
@@ -64,5 +71,7 @@ void do_cmd_need_archivelog(void);
 bool is_thread_reported(unsigned int tid);
 void tzdebug_archivelog(void);
 void cmd_monitor_ta_crash(int32_t type);
+void memstat_report(void);
+void tzdebug_memstat(void);
 
 #endif

@@ -3,7 +3,7 @@
  *
  * exported funcs for spi interrupt actions
  *
- * Copyright (c) 2012-2021 Huawei Technologies Co., Ltd.
+ * Copyright (c) 2012-2022 Huawei Technologies Co., Ltd.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -44,6 +44,8 @@
 #include "smc_smp.h"
 #include "session_manager.h"
 #include "tz_kthread_affinity.h"
+
+#define DEFAULT_SPI_NUM 111
 
 #define MAX_CALLBACK_COUNT 100
 #define UUID_SIZE 16
@@ -410,7 +412,7 @@ static void tc_notify_set_affinity(struct notify_data_entry *entry)
 		 */
 		cpumask_copy(&pe->ta_mask, &mask);
 		smc_wakeup_ca(af_data->ca_thread_id);
-		tlogi("set affinity for ca thread id %u\n", af_data->ca_thread_id);
+		tlogd("set affinity for ca thread id %u\n", af_data->ca_thread_id);
 		put_pending_entry(pe);
 	} else {
 		tloge("invalid ca thread id %u for set affinity\n",
@@ -615,7 +617,7 @@ static int send_notify_cmd(unsigned int cmd_id)
 
 static int config_spi_context(struct device *class_dev, struct device_node *np)
 {
-	unsigned int irq;
+	unsigned int irq = DEFAULT_SPI_NUM;
 	int ret;
 
 #ifndef CONFIG_ACPI
@@ -634,7 +636,7 @@ static int config_spi_context(struct device *class_dev, struct device_node *np)
 	ret = devm_request_irq(class_dev, irq, tc_secure_notify,
 		IRQF_NO_SUSPEND, TC_NS_CLIENT_DEV, NULL);
 	if (ret < 0) {
-		tloge("device irq %u request failed %u", irq, ret);
+		tloge("device irq %u request failed %d", irq, ret);
 		return ret;
 	}
 
@@ -652,6 +654,7 @@ int tz_spi_init(struct device *class_dev, struct device_node *np)
 	if (!class_dev) /* here np can be NULL */
 		return -EINVAL;
 
+	spin_lock_init(&g_notify_lock);
 	g_tz_spi_wq = alloc_workqueue("g_tz_spi_wq",
 		WQ_UNBOUND | WQ_HIGHPRI, TZ_WQ_MAX_ACTIVE);
 	if (!g_tz_spi_wq) {
@@ -691,10 +694,9 @@ int tz_spi_init(struct device *class_dev, struct device_node *np)
 
 		g_notify_data_entry_shadow =
 			&g_notify_data->entry[NOTIFY_DATA_ENTRY_SHADOW - 1];
-		tlogi("target is: %llx\n",
+		tlogd("target is: %llx\n",
 		      g_notify_data_entry_shadow->context.shadow.target_tcb);
 	}
-	spin_lock_init(&g_notify_lock);
 
 	return 0;
 clean:

@@ -3,7 +3,7 @@
  *
  * macro declaration for libteec interface for kernel CA.
  *
- * Copyright (c) 2012-2021 Huawei Technologies Co., Ltd.
+ * Copyright (c) 2012-2022 Huawei Technologies Co., Ltd.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -54,6 +54,9 @@ enum global_service_cmd_id {
 	GLOBAL_CMD_ID_SET_SERVE_CMD = 0x1b,
 	GLOBAL_CMD_ID_LATE_INIT = 0x20,
 	GLOBAL_CMD_ID_GET_TEE_VERSION = 0x22,
+	GLOBAL_CMD_ID_REGISTER_RESMEM = 0x24,
+	GLOBAL_CMD_ID_DUMP_SRV_SESS = 0x25,
+	GLOBAL_CMD_ID_TRACE_ENABLE = 0x26,
 	GLOBAL_CMD_ID_UNKNOWN = 0x7FFFFFFE,
 	GLOBAL_CMD_ID_MAX = 0x7FFFFFFF
 };
@@ -131,6 +134,7 @@ enum TEEC_ParamType {
 	TEEC_MEMREF_TEMP_INOUT = 0x07,
 	TEEC_ION_INPUT = 0x08,
 	TEEC_ION_SGLIST_INPUT = 0x09,
+	TEEC_MEMREF_SHARED_INOUT = 0xa,
 	TEEC_MEMREF_WHOLE = 0xc,
 	TEEC_MEMREF_PARTIAL_INPUT = 0xd,
 	TEEC_MEMREF_PARTIAL_OUTPUT = 0xe,
@@ -147,6 +151,10 @@ enum TEE_ParamType {
 	TEE_PARAM_TYPE_MEMREF_INOUT = 0x7,
 	TEE_PARAM_TYPE_ION_INPUT = 0x8,
 	TEE_PARAM_TYPE_ION_SGLIST_INPUT = 0x9,
+	TEE_PARAM_TYPE_MEMREF_SHARED_INOUT = 0xa,
+	TEE_PARAM_TYPE_RESMEM_INPUT = 0xc,
+	TEE_PARAM_TYPE_RESMEM_OUTPUT = 0xd,
+	TEE_PARAM_TYPE_RESMEM_INOUT = 0xe
 };
 
 enum TEEC_LoginMethod {
@@ -157,6 +165,7 @@ enum TEEC_LoginMethod {
 	TEEC_LOGIN_USER_APPLICATION = 0x5,
 	TEEC_LOGIN_GROUP_APPLICATION = 0x6,
 	TEEC_LOGIN_IDENTIFY = 0x7,
+	TEEK_LOGIN_IDENTIFY = 0x80000001
 };
 
 #endif

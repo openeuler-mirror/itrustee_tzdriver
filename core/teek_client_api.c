@@ -3,7 +3,7 @@
  *
  * function definition for libteec interface for kernel CA.
  *
- * Copyright (c) 2012-2021 Huawei Technologies Co., Ltd.
+ * Copyright (c) 2012-2022 Huawei Technologies Co., Ltd.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -450,7 +450,7 @@ static uint32_t open_session_and_switch_ret(struct teec_session *session,
 		session->context = context;
 		return TEEC_SUCCESS;
 	} else if (ret < 0) {
-		tloge("open session failed, ioctl errno = %u\n", ret);
+		tloge("open session failed, ioctl errno = %d\n", ret);
 		if (ret == -EFAULT)
 			teec_ret = TEEC_ERROR_ACCESS_DENIED;
 		else if (ret == -ENOMEM)
@@ -521,10 +521,6 @@ static uint32_t proc_teek_open_session(struct teec_context *context,
 		goto set_ori;
 	load_app_flag = true;
 
-#ifdef CONFIG_AUTH_ENHANCE
-	cli_context.token.teec_token = session->teec_token;
-	cli_context.token_len = sizeof(session->teec_token);
-#endif
 	teec_ret = open_session_and_switch_ret(session, context,
 		destination, &cli_context, &origin);
 
@@ -587,21 +583,14 @@ void teek_close_session(struct teec_session *session)
 		tloge("init cli context failed just return\n");
 		return;
 	}
-#ifdef CONFIG_AUTH_ENHANCE
-	cli_context.token.teec_token = session->teec_token;
-	cli_context.token_len = sizeof(session->teec_token);
-#endif
+
 	ret = tc_ns_close_session(session->context->dev, &cli_context);
 	if (!ret) {
 		session->session_id = 0;
 		if (memset_s((uint8_t *)(&session->service_id),
 			sizeof(session->service_id), 0x00, UUID_LEN))
 			tloge("memset error\n");
-#ifdef CONFIG_AUTH_ENHANCE
-		if (memset_s(session->teec_token,
-			TOKEN_SAVE_LEN, 0x00, TOKEN_SAVE_LEN))
-			tloge("memset session's member error\n");
-#endif
+
 		session->ops_cnt = 0;
 		session->context = NULL;
 	} else {
@@ -679,10 +668,6 @@ uint32_t teek_invoke_command(struct teec_session *session, uint32_t cmd_id,
 		}
 	}
 
-#ifdef CONFIG_AUTH_ENHANCE
-	cli_context.token.teec_token = session->teec_token;
-	cli_context.token_len = sizeof(session->teec_token);
-#endif
 	teec_ret = proc_invoke_cmd(session, &cli_context, &origin);
 
 set_ori:

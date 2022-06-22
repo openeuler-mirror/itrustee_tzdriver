@@ -3,7 +3,7 @@
  *
  * log func declaration
  *
- * Copyright (c) 2012-2021 Huawei Technologies Co., Ltd.
+ * Copyright (c) 2012-2022 Huawei Technologies Co., Ltd.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -32,8 +32,7 @@ enum {
 };
 #define MOD_TEE "tzdriver"
 
-#define TEE_USR_LOG_MASK 3
-#define TEE_LOG_MASK TEE_USR_LOG_MASK
+#define TEE_LOG_MASK TZ_DEBUG_INFO
 
 #define tlogv(fmt, args...) \
 do { \

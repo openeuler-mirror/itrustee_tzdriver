@@ -3,7 +3,7 @@
  *
  * function for proc open,close session and invoke
  *
- * Copyright (c) 2020-2021 Huawei Technologies Co., Ltd.
+ * Copyright (c) 2020-2022 Huawei Technologies Co., Ltd.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -91,6 +91,16 @@ static int tc_s4_alloc_crypto_buffer(struct device *dev,
 	}
 
 	return 0;
+}
+
+static void free_resource(const char *kernel_mem_addr)
+{
+	vunmap(g_s4_buffer_vaddr);
+	vfree(kernel_mem_addr);
+	g_s4_kernel_mem_addr = NULL;
+	g_s4_buffer_paddr = 0;
+	g_s4_buffer_vaddr = NULL;
+	g_s4_buffer_size = 0;
 }
 
 #ifndef CONFIG_ARCH32
@@ -250,63 +260,61 @@ static int tc_s4_transfer_data(char *kernel_mem_addr, uint32_t crypt_op)
 }
 
 static int tc_s4_pm_ops(struct device *dev, uint32_t power_op,
-	uint32_t crypt_op)
+	uint32_t crypt_op, char *kernel_mem_addr)
 {
-	char *kernel_mem_addr = NULL;
 	int ret;
 
-	if (power_op == TSP_S4_SUSPEND) {
-		ret = tc_s4_alloc_crypto_buffer(dev, &kernel_mem_addr);
-		if (ret) {
-			tloge("alloc s4 encrypt mem failed with ret %d\n", ret);
-			return ret;
-		}
+	if (power_op == TSP_S4_SUSPEND) 
 		g_s4_kernel_mem_addr = kernel_mem_addr;
-	} else {
+	else 
 		kernel_mem_addr = g_s4_kernel_mem_addr;
-	}
 
 	isb();
 	wmb();
 
 	/* notify TEEOS to suspend all pm driver */
 	if (power_op == TSP_S4_SUSPEND) {
-		if (tc_s4_suspend_or_resume(power_op) != 0) {
-			ret = -EFAULT;
-			goto free_resource;
+		ret = tc_s4_suspend_or_resume(power_op);
+		if (ret != 0) {
+			tloge("tc s4 suspend failed\n");
+			return ret;
 		}
 	}
 
 	ret = tc_s4_transfer_data(kernel_mem_addr, crypt_op);
-	if (ret)
-		goto free_resource;
+	if (ret != 0){
+		tloge("transfer data failed, power_op=0x%x\n", power_op);
+		return ret;
+	}
 
 	/* notify TEEOS to resume all pm driver */
 	if (power_op == TSP_S4_RESUME) {
-		if (tc_s4_suspend_or_resume(power_op) != 0) {
-			ret = -EFAULT;
-			goto free_resource;
+		ret = tc_s4_suspend_or_resume(power_op);
+		if (ret != 0) {
+			tloge("tc s4 resume failed\n");
+			return ret;
 		}
-		ret = 0;
-		goto free_resource;
 	}
 
 	return 0;
-free_resource:
-	vunmap(g_s4_buffer_vaddr);
-	vfree(kernel_mem_addr);
-	g_s4_kernel_mem_addr = NULL;
-	g_s4_buffer_paddr = 0;
-	g_s4_buffer_vaddr = NULL;
-	g_s4_buffer_size = 0;
-	return ret;
 }
 
 int tc_s4_pm_suspend(struct device *dev)
 {
 	int ret;
+	char *kernel_mem_addr = NULL;
 
-	ret = tc_s4_pm_ops(dev, TSP_S4_SUSPEND, TSP_S4_ENCRYPT_AND_COPY);
+	ret = tc_s4_alloc_crypto_buffer(dev, &kernel_mem_addr);
+	if (ret != 0) {
+		tloge("alloc buffer failed\n");
+		return ret;
+	}
+
+	ret = tc_s4_pm_ops(dev, TSP_S4_SUSPEND, TSP_S4_ENCRYPT_AND_COPY, kernel_mem_addr);
+	if (ret != 0) {
+		free_resource(kernel_mem_addr);
+		tloge("s4 suspend failed\n");
+	}
 	return ret;
 }
 
@@ -314,6 +322,10 @@ int tc_s4_pm_resume(struct device *dev)
 {
 	int ret;
 
-	ret = tc_s4_pm_ops(dev, TSP_S4_RESUME, TSP_S4_DECRYPT_AND_COPY);
+	ret = tc_s4_pm_ops(dev, TSP_S4_RESUME, TSP_S4_DECRYPT_AND_COPY, g_s4_kernel_mem_addr);
+	if (ret != 0)
+		tloge("s4 resume failed\n");
+	
+	free_resource(g_s4_kernel_mem_addr);
 	return ret;
 }

@@ -3,7 +3,7 @@
  *
  * data structure declaration for nonsecure world
  *
- * Copyright (c) 2012-2021 Huawei Technologies Co., Ltd.
+ * Copyright (c) 2012-2022 Huawei Technologies Co., Ltd.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -19,6 +19,7 @@
 #define TC_NS_CLIENT_H
 
 #include <linux/types.h>
+#include <linux/version.h>
 
 #define UUID_LEN                16
 #define PARAM_NUM               4
@@ -36,6 +37,12 @@
 #define ZERO_OR_NULL_PTR(x) ((unsigned long)(x) <= (unsigned long)ZERO_SIZE_PTR)
 #endif
 
+#if (KERNEL_VERSION(5, 10, 0) <= LINUX_VERSION_CODE)
+#define mm_sem_lock(mm) mm->mmap_lock
+#else
+#define mm_sem_lock(mm) mm->mmap_sem
+#endif
+
 struct tc_ns_client_login {
 	__u32 method;
 	__u32 mdata;
@@ -51,6 +58,10 @@ union tc_ns_client_param {
 		__u64 a_addr;
 		__u64 b_addr;
 	} value;
+	struct {
+		__u64 buffer;
+		__u64 size_addr;
+	}sharedmem;
 };
 
 struct tc_ns_client_return {
@@ -67,16 +78,6 @@ struct tc_ns_client_context {
 	union tc_ns_client_param params[PARAM_NUM];
 	__u32 param_types;
 	__u8 started;
-#ifdef CONFIG_AUTH_ENHANCE
-	union {
-		struct {
-			unsigned int teec_token_addr;
-			unsigned int teec_token_h_addr;
-		} token_addr;
-		void *teec_token;
-	} token;
-	__u32 token_len;
-#endif
 	__u32 calling_pid;
 	unsigned int file_size;
 	union {
