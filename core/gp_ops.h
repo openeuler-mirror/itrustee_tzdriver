@@ -3,7 +3,7 @@
  *
  * function declaration for alloc global operation and pass params to TEE.
  *
- * Copyright (c) 2012-2021 Huawei Technologies Co., Ltd.
+ * Copyright (c) 2012-2022 Huawei Technologies Co., Ltd.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -33,6 +33,13 @@ struct tc_op_params {
 	struct tc_ns_temp_buf local_tmpbuf[TEE_PARAM_NUM];
 	uint32_t trans_paramtype[TEE_PARAM_NUM];
 	bool op_inited;
+};
+
+struct pagelist_info {
+	uint64_t page_num;
+	uint64_t page_size;
+	uint64_t sharedmem_offset;
+	uint64_t sharedmem_size;
 };
 
 int write_to_client(void __user *dest, size_t dest_size,

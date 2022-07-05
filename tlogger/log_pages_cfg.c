@@ -3,7 +3,7 @@
  *
  * for pages log cfg api define
  *
- * Copyright (c) 2012-2021 Huawei Technologies Co., Ltd.
+ * Copyright (c) 2012-2022 Huawei Technologies Co., Ltd.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -42,8 +42,8 @@ int register_log_exception(void)
 }
 
 struct pages_module_result {
-	u64 log_addr;
-	unsigned int log_len;
+	uint64_t log_addr;
+	uint32_t log_len;
 };
 
 struct pages_module_result g_mem_info = {0};
@@ -68,14 +68,14 @@ static int tee_pages_register_core(void)
 }
 
 /* Register log memory */
-int register_log_mem(u64 *addr, u32 *len)
+int register_log_mem(uint64_t *addr, uint32_t *len)
 {
 	int ret;
-	u64 mem_addr;
-	u32 mem_len;
+	uint64_t mem_addr;
+	uint32_t mem_len;
 
 	if (!addr || !len) {
-		tloge("check addr or len is failed\n");
+		tloge("addr or len is invalid\n");
 		return -1;
 	}
 
@@ -111,7 +111,7 @@ void ta_crash_report_log(void)
 {
 }
 
-int *map_log_mem(u64 mem_addr, u32 mem_len)
+int *map_log_mem(uint64_t mem_addr, uint32_t mem_len)
 {
 	(void)mem_len;
 	return (int *)(uintptr_t)mem_addr;
@@ -123,22 +123,3 @@ void unmap_log_mem(int *log_buffer)
 		get_order(PAGES_LOG_MEM_LEN));
 }
 
-#define ROOT_UID                      0
-
-#ifdef LAST_TEE_MSG_ROOT_GID
-#define FILE_CHOWN_GID                0
-#else
-/* system gid for last_teemsg file sys chown */
-#define FILE_CHOWN_GID                1000
-#endif
-
-void get_log_chown(uid_t *user, gid_t *group)
-{
-	if (!user || !group) {
-		tloge("user or group buffer is null\n");
-		return;
-	}
-
-	*user = ROOT_UID;
-	*group = FILE_CHOWN_GID;
-}

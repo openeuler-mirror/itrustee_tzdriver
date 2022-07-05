@@ -3,7 +3,7 @@
  *
  * for log cfg api define
  *
- * Copyright (c) 2012-2021 Huawei Technologies Co., Ltd.
+ * Copyright (c) 2012-2022 Huawei Technologies Co., Ltd.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -20,18 +20,19 @@
 
 #include <linux/types.h>
 
-#if defined(CONFIG_PAGES_MEM)
-int register_log_mem(u64 *addr, u32 *len);
+#if ((defined(CONFIG_BBOX_MEM) || defined(CONFIG_RDR_MEM) || \
+	defined(CONFIG_PAGES_MEM) || defined(CONFIG_TEELOG)))
+int register_log_mem(uint64_t *addr, uint32_t *len);
 int register_log_exception(void);
 void report_log_system_error(void);
 void report_log_system_panic(void);
-int *map_log_mem(u64 mem_addr, u32 mem_len);
+int *map_log_mem(uint64_t mem_addr, uint32_t mem_len);
 void unmap_log_mem(int *log_buffer);
 void get_log_chown(uid_t *user, gid_t *group);
 void unregister_log_exception(void);
 void ta_crash_report_log(void);
 #else
-static inline int register_log_mem(const u64 *addr, const u32 *len)
+static inline int register_log_mem(const uint64_t *addr, const uint32_t *len)
 {
 	(void)addr;
 	(void)len;
@@ -51,7 +52,7 @@ static inline void report_log_system_panic(void)
 {
 }
 
-static inline int *map_log_mem(u64 mem_addr, u32 mem_len)
+static inline int *map_log_mem(uint64_t mem_addr, uint32_t mem_len)
 {
 	(void)mem_addr;
 	(void)mem_len;
@@ -62,11 +63,6 @@ static inline void unmap_log_mem(const int *log_buffer)
 	(void)log_buffer;
 }
 
-static inline void get_log_chown(const uid_t *user, const gid_t *group)
-{
-	(void)user;
-	(void)group;
-}
 static inline void unregister_log_exception(void)
 {
 }

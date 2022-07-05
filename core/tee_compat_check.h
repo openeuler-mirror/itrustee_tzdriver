@@ -3,7 +3,7 @@
  *
  * check compatibility between tzdriver and teeos.
  *
- * Copyright (c) 2021-2021 Huawei Technologies Co., Ltd.
+ * Copyright (c) 2021-2022 Huawei Technologies Co., Ltd.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -25,8 +25,8 @@
  * this version number MAJOR.MINOR is used
  * to identify the compatibility of tzdriver and teeos
  */
-#define TEEOS_COMPAT_LEVEL_MAJOR 0
-#define TEEOS_COMPAT_LEVEL_MINOR 1
+#define TEEOS_COMPAT_LEVEL_MAJOR 1
+#define TEEOS_COMPAT_LEVEL_MINOR 0
 
 #define VER_CHECK_MAGIC_NUM 0x5A5A5A5A
 #define COMPAT_LEVEL_BUF_LEN 12

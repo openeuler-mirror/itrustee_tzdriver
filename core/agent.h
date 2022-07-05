@@ -3,7 +3,7 @@
  *
  * agent manager function definition, such as register and send cmd
  *
- * Copyright (c) 2012-2021 Huawei Technologies Co., Ltd.
+ * Copyright (c) 2012-2022 Huawei Technologies Co., Ltd.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -20,6 +20,7 @@
 #include <linux/fs.h>
 #include "teek_ns_client.h"
 
+#define MAX_PATH_SIZE         512
 #define AGENT_FS_ID           0x46536673 /* FSfs */
 #define AGENT_MISC_ID         0x4d495343 /* MISC */
 
@@ -52,7 +53,6 @@ struct smc_event_data {
 	struct list_head head;
 	struct tc_ns_smc_cmd cmd;
 	struct tc_ns_dev_file *owner;
-	pid_t pid;
 	void *agent_buff_kernel;
 	void *agent_buff_user; /* used for unmap */
 	unsigned int agent_buff_size;
@@ -81,6 +81,12 @@ struct tee_agent_kernel_ops {
 	struct list_head list;
 };
 
+struct ca_info {
+	char path[MAX_PATH_SIZE];
+	uint32_t uid;
+	uint32_t agent_id;
+};
+
 static inline void get_agent_event(struct smc_event_data *event_data)
 {
 	if (event_data)
@@ -95,6 +101,8 @@ static inline void put_agent_event(struct smc_event_data *event_data)
 	}
 }
 
+int is_allowed_agent_ca(const struct ca_info *ca, bool check_agent_id);
+bool is_third_party_agent(unsigned int agent_id);
 void agent_init(void);
 void agent_exit(void);
 struct smc_event_data *find_event_control(unsigned int agent_id);
@@ -117,6 +125,5 @@ int tee_agent_kernel_register(struct tee_agent_kernel_ops *new_agent);
 bool is_system_agent(const struct tc_ns_dev_file *dev_file);
 void tee_agent_clear_dev_owner(const struct tc_ns_dev_file *dev_file);
 char *get_proc_dpath(char *path, int path_len);
-void clean_agent_pid_info(struct tc_ns_dev_file *dev_file);
 
 #endif

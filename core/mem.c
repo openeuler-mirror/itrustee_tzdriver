@@ -3,7 +3,7 @@
  *
  * memory operation for gp sharedmem.
  *
- * Copyright (c) 2012-2021 Huawei Technologies Co., Ltd.
+ * Copyright (c) 2012-2022 Huawei Technologies Co., Ltd.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -33,17 +33,33 @@
 #include "agent.h"
 #include "tc_ns_log.h"
 #include "mailbox_mempool.h"
+#include "reserved_mempool.h"
 
 void tc_mem_free(struct tc_ns_shared_mem *shared_mem)
 {
 	if (!shared_mem)
 		return;
+	
+	if (shared_mem->mem_type == RESERVED_TYPE) {
+		reserved_mem_free(shared_mem->kernel_addr);
+		kfree(shared_mem);
+		return;
+	}
 
 	if (shared_mem->kernel_addr) {
 		vfree(shared_mem->kernel_addr);
 		shared_mem->kernel_addr = NULL;
 	}
 	kfree(shared_mem);
+}
+
+static void init_shared_mem(struct tc_ns_shared_mem *sh, void *addr, size_t len)
+{
+	sh->kernel_addr = addr;
+	sh->len = len;
+	sh->user_addr = INVALID_MAP_ADDR;
+	sh->user_addr_ca = INVALID_MAP_ADDR;
+	atomic_set(&sh->usage, 0);
 }
 
 struct tc_ns_shared_mem *tc_mem_allocate(size_t len)
@@ -56,8 +72,24 @@ struct tc_ns_shared_mem *tc_mem_allocate(size_t len)
 		tloge("shared_mem kmalloc failed\n");
 		return ERR_PTR(-ENOMEM);
 	}
-
+	shared_mem->mem_type = VMALLOC_TYPE;
 	len = ALIGN(len, SZ_4K);
+	if (exist_res_mem()) {
+		if (len > RESEVED_MAX_ALLOC_SIZE || len > RESERVED_MEM_POOL_SIZE) {
+			tloge("allocate reserved mem size too large\n");
+			return ERR_PTR(-EINVAL);
+		}
+		addr = reserved_mem_alloc(len);
+		if (addr) {
+			shared_mem->mem_type = RESERVED_TYPE;
+			init_shared_mem(shared_mem, addr, len);
+			return shared_mem;
+		} else {
+			tlogw("no more reserved memory to alloc so we use system vmalloc.\n");
+		}
+	}
+
+
 	if (len > MAILBOX_POOL_SIZE) {
 		tloge("alloc sharemem size %zu is too large\n", len);
 		kfree(shared_mem);
@@ -69,10 +101,6 @@ struct tc_ns_shared_mem *tc_mem_allocate(size_t len)
 		kfree(shared_mem);
 		return ERR_PTR(-ENOMEM);
 	}
-	shared_mem->kernel_addr = addr;
-	shared_mem->len = len;
-	shared_mem->user_addr = NULL;
-	shared_mem->user_addr_ca = NULL;
-	atomic_set(&shared_mem->usage, 0);
+	init_shared_mem(shared_mem, addr, len);
 	return shared_mem;
 }

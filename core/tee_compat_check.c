@@ -3,7 +3,7 @@
  *
  * check compatibility between tzdriver and tee.
  *
- * Copyright (c) 2021-2021 Huawei Technologies Co., Ltd.
+ * Copyright (c) 2021-2022 Huawei Technologies Co., Ltd.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -42,9 +42,8 @@ int32_t check_teeos_compat_level(uint32_t *buffer, uint32_t size)
 		return -EPERM;
 	}
 	/* just print warning */
-	if (buffer[2] != minor) {
+	if (buffer[2] != minor) 
 		tlogw("check minor ver failed, minor tz=%u, minor tee=%u\n",
 			minor, buffer[2]);
-	}
 	return 0;
 }

@@ -3,7 +3,7 @@
  *
  * define exported structures
  *
- * Copyright (c) 2012-2021 Huawei Technologies Co., Ltd.
+ * Copyright (c) 2012-2022 Huawei Technologies Co., Ltd.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -43,10 +43,6 @@ struct teec_session {
 	struct teec_uuid service_id;
 	uint32_t ops_cnt;
 	struct teec_context *context;
-#ifdef CONFIG_AUTH_ENHANCE
-	/* token_save_len  24byte = token  16byte + timestamp  8byte */
-	uint8_t teec_token[24];
-#endif
 };
 
 struct teec_sharedmemory {
@@ -118,10 +114,6 @@ typedef struct {
 	uint32_t ops_cnt;
 	struct list_head head;
 	TEEC_Context *context;
-#ifdef CONFIG_AUTH_ENHANCE
-	/* TOKEN_SAVE_LEN  24byte = token  16byte + timestamp  8byte */
-	uint8_t teec_token[24];
-#endif
 } TEEC_Session;
 
 typedef struct {

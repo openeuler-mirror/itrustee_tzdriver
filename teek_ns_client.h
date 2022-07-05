@@ -3,7 +3,7 @@
  *
  * define structures and IOCTLs.
  *
- * Copyright (c) 2012-2021 Huawei Technologies Co., Ltd.
+ * Copyright (c) 2012-2022 Huawei Technologies Co., Ltd.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -42,6 +42,8 @@
 #define TEE_REQ_FROM_USER_MODE   0U
 #define TEE_REQ_FROM_KERNEL_MODE 1U
 #define TEE_PARAM_NUM            4
+#define VMALLOC_TYPE             0
+#define RESERVED_TYPE            1
 
 /* Max sizes for login info buffer comming from teecd */
 #define MAX_PACKAGE_NAME_LEN 255
@@ -63,11 +65,13 @@ struct tc_uuid {
 	uint8_t clockseq_and_node[8]; /* clock len is 8 */
 };
 
+#define INVALID_MAP_ADDR ((void*)-1)
 struct tc_ns_shared_mem {
 	void *kernel_addr;
 	void *user_addr;
 	void *user_addr_ca; /* for ca alloc share mem */
 	unsigned int len;
+	int mem_type;
 	struct list_head head;
 	atomic_t usage;
 	atomic_t offset;
@@ -116,6 +120,10 @@ union tc_ns_parameter {
 		unsigned int a;
 		unsigned int b;
 	} value;
+	struct {
+		unsigned int buffer;
+		unsigned int size;
+	} sharedmem;
 };
 
 struct tc_ns_login {
@@ -161,15 +169,9 @@ struct tc_ns_smc_cmd {
 	int          ret_val;
 	unsigned int event_nr;
 	unsigned int uid;
-	unsigned int ca_pid;
-#ifdef CONFIG_AUTH_ENHANCE
-	unsigned int token_phys;
-	unsigned int token_h_phys;
-	unsigned int pid;
-	unsigned int params_phys;
-	unsigned int params_h_phys;
+	unsigned int ca_pid;         /* pid */
+	unsigned int pid;            /* tgid */
 	unsigned int eventindex;     /* tee audit event index for upload */
-#endif
 	bool started;
 } __attribute__((__packed__));
 
@@ -180,64 +182,6 @@ struct tc_wait_data {
 	wait_queue_head_t send_cmd_wq;
 	int send_wait_flag;
 };
-
-#ifdef CONFIG_AUTH_ENHANCE
-
-#define TOKEN_SAVE_LEN	        24
-/* token(32byte) + timestamp(8byte) + kernal_api(1byte) + sync(1byte) */
-#define TOKEN_BUFFER_LEN        42
-
-/* Using AES-CBC algorithm to encrypt communication between secure world and
- * normal world.
- */
-#define CIPHER_KEY_BYTESIZE   32   /* AES-256 key size */
-#define IV_BYTESIZE           16  /* AES-CBC encryption initialization vector size */
-#define CIPHER_BLOCK_BYTESIZE 16 /* AES-CBC cipher block size */
-#define SCRAMBLING_NUMBER     3
-#define MAGIC_SIZE            16
-
-/* One encrypted block, which is aligned with CIPHER_BLOCK_BYTESIZE bytes
- * Head + Payload + Padding
- */
-struct encryption_head {
-	int8_t magic[MAGIC_SIZE];
-	uint32_t payload_len;
-};
-
-#define HASH_PLAINTEXT_SIZE (MAX_SHA_256_SZ + sizeof(struct encryption_head))
-#define HASH_PLAINTEXT_ALIGNED_SIZE \
-	ALIGN(HASH_PLAINTEXT_SIZE, CIPHER_BLOCK_BYTESIZE)
-
-struct session_crypto_info {
-	uint8_t key[CIPHER_KEY_BYTESIZE]; /* AES-256 key */
-	uint8_t iv[IV_BYTESIZE]; /* AES-CBC encryption initialization vector */
-};
-
-struct session_secure_info {
-	uint32_t challenge_word;
-	uint32_t scrambling[SCRAMBLING_NUMBER];
-	struct session_crypto_info crypto_info;
-};
-
-struct tc_ns_token {
-	/* 42byte, token_32byte + timestamp_8byte + kernal_api_1byte + sync_1byte */
-	uint8_t *token_buffer;
-	uint32_t token_len;
-};
-
-struct session_secure_params {
-	struct encryption_head head;
-	union {
-		struct {
-			uint32_t challenge_word;
-		} ree2tee;
-		struct {
-			uint32_t scrambling[SCRAMBLING_NUMBER];
-			struct session_crypto_info crypto_info;
-		} tee2ree;
-	} payload;
-};
-#endif
 
 #define NUM_OF_SO 1
 #ifdef CONFIG_CMS_CAHASH_AUTH
@@ -251,34 +195,14 @@ struct tc_ns_session {
 	struct tc_wait_data wait_data;
 	struct mutex ta_session_lock; /* for open/close/invoke on 1 session */
 	struct tc_ns_dev_file *owner;
-#ifdef CONFIG_AUTH_ENHANCE
-	/* Session secure enhanced information */
-	struct session_secure_info secure_info;
-	struct tc_ns_token teec_token;
-	/* when CONFIG_AUTH_ENHANCE enabled, hash of the same CA and
-	 * SO library will be encrypted by different session key,
-	 * so put auth_hash_buf in struct tc_ns_session.
-	 * the first MAX_SHA_256_SZ size stores SO hash,
-	 * the next HASH_PLAINTEXT_ALIGNED_SIZE stores CA hash and cryptohead,
-	 * the last IV_BYTESIZE size stores aes iv
-	 */
-	uint8_t auth_hash_buf[MAX_SHA_256_SZ * NUM_OF_SO + HASH_PLAINTEXT_ALIGNED_SIZE + IV_BYTESIZE];
-#else
 	uint8_t auth_hash_buf[MAX_SHA_256_SZ * NUM_OF_SO + MAX_SHA_256_SZ];
-#endif
 	atomic_t usage;
 };
 
 struct mb_cmd_pack {
 	struct tc_ns_operation operation;
-#ifdef CONFIG_AUTH_ENHANCE
-	unsigned char login_data[MAX_SHA_256_SZ * NUM_OF_SO + HASH_PLAINTEXT_ALIGNED_SIZE + IV_BYTESIZE];
-	unsigned char token[TOKEN_BUFFER_LEN];
-	unsigned char secure_params[ALIGN(sizeof(struct session_secure_params),
-		CIPHER_BLOCK_BYTESIZE) + IV_BYTESIZE];
-#else
 	unsigned char login_data[MAX_SHA_256_SZ * NUM_OF_SO + MAX_SHA_256_SZ];
-#endif
+
 };
 
 #endif

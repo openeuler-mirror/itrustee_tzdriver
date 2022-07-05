@@ -3,7 +3,7 @@
  *
  * function declaration for sending smc cmd
  *
- * Copyright (c) 2012-2021 Huawei Technologies Co., Ltd.
+ * Copyright (c) 2012-2022 Huawei Technologies Co., Ltd.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -53,11 +53,7 @@ struct pending_entry {
 #ifdef CONFIG_BIG_SESSION
 #define MAX_SMC_CMD CONFIG_BIG_SESSION
 #else
-#ifdef CONFIG_AUTH_ENHANCE
 #define MAX_SMC_CMD 18
-#else
-#define MAX_SMC_CMD 23
-#endif
 #endif
 
 #ifdef DIV_ROUND_UP
@@ -86,6 +82,9 @@ struct pending_entry {
 #undef DECLARE_BITMAP
 #endif
 #define DECLARE_BITMAP(name, bits)      uint64_t name[BITS_TO_LONGS(bits)]
+
+#define SIQ_DUMP_TIMEOUT 1U
+#define SIQ_DUMP_SHELL 2U
 
 typedef uint32_t smc_buf_lock_t;
 
@@ -122,6 +121,6 @@ struct pending_entry *find_pending_entry(pid_t pid);
 void foreach_pending_entry(void (*func)(struct pending_entry *));
 void put_pending_entry(struct pending_entry *pe);
 void show_cmd_bitmap(void);
-void wakeup_tc_siq(void);
+void wakeup_tc_siq(uint32_t siq_mode);
 
 #endif

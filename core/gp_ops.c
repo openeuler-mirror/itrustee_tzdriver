@@ -1,9 +1,9 @@
 /*
- * gp_op.c
+ * gp_ops.c
  *
  * alloc global operation and pass params to TEE.
  *
- * Copyright (c) 2012-2021 Huawei Technologies Co., Ltd.
+ * Copyright (c) 2012-2022 Huawei Technologies Co., Ltd.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -30,6 +30,9 @@
 #include <linux/version.h>
 #include <linux/types.h>
 #include <linux/cred.h>
+#include <linux/pagemap.h>
+#include <linux/highmem.h>
+#include <linux/slab.h>
 #include <asm/memory.h>
 #include <securec.h>
 #include "teek_client_constants.h"
@@ -40,7 +43,7 @@
 #include "mem.h"
 #include "mailbox_mempool.h"
 #include "tc_client_driver.h"
-#include "security_auth_enhance.h"
+#include "reserved_mempool.h"
 #include "tlogger.h"
 
 #define MAX_SHARED_SIZE 0x100000      /* 1 MiB */
@@ -345,23 +348,6 @@ static int update_input_data(const union tc_ns_client_param *client_param,
 	return 0;
 }
 
-static int do_opensess_auth_enhance(const struct tc_call_params *call_params,
-	void *temp_buf, uint32_t buffer_size, unsigned int index)
-{
-	if (!is_opensession_by_index(call_params->flags,
-		call_params->context->cmd_id, index))
-		return 0;
-
-#ifdef CONFIG_AUTH_ENHANCE
-	if (encrypt_login_info(buffer_size, temp_buf,
-		call_params->sess->secure_info.crypto_info.key)) {
-		tloge("encrypt login info failed\n");
-		return -EFAULT;
-	}
-#endif
-	return 0;
-}
-
 /*
  * temp buffers we need to allocate/deallocate
  * for every operation
@@ -402,10 +388,6 @@ static int alloc_for_tmp_mem(const struct tc_call_params *call_params,
 
 	if (update_input_data(client_param, buffer_size, temp_buf,
 		param_type, kernel_params))
-		return -EFAULT;
-
-	if (do_opensess_auth_enhance(call_params, temp_buf,
-		buffer_size, index))
 		return -EFAULT;
 
 	op_params->mb_pack->operation.params[index].memref.buffer =
@@ -465,6 +447,30 @@ static bool is_phyaddr_valid(struct tc_ns_operation *operation, int index)
 	return true;
 }
 
+static int set_operation_buffer(struct tc_ns_shared_mem *shared_mem, void *buffer_addr,
+	uint32_t buffer_size, unsigned int index, struct tc_op_params *op_params)
+{
+	if (shared_mem->mem_type == RESERVED_TYPE) {
+		/* no copy to mailbox */
+		op_params->mb_pack->operation.mb_buffer[index] = buffer_addr;
+		op_params->mb_pack->operation.params[index].memref.buffer = 
+			res_mem_virt_to_phys((uintptr_t)buffer_addr);
+		op_params->mb_pack->operation.buffer_h_addr[index] = 
+			res_mem_virt_to_phys((uintptr_t)buffer_addr) >> ADDR_TRANS_NUM;
+	} else {
+		buffer_addr = mailbox_copy_alloc(buffer_addr, buffer_size);
+		if (buffer_addr == NULL) 
+			return -ENOMEM;
+
+		op_params->mb_pack->operation.mb_buffer[index] = buffer_addr;
+		op_params->mb_pack->operation.params[index].memref.buffer =
+			virt_to_phys(buffer_addr);
+		op_params->mb_pack->operation.buffer_h_addr[index] = 
+			(uint64_t)virt_to_phys(buffer_addr) >> ADDR_TRANS_NUM;
+	}
+	return 0;
+}
+
 /*
  * MEMREF_PARTIAL buffers are already allocated so we just
  * need to search for the shared_mem ref;
@@ -503,16 +509,13 @@ static int alloc_for_ref_mem(const struct tc_call_params *call_params,
 		buffer_addr = (void *)(uintptr_t)(
 			(uintptr_t)shared_mem->kernel_addr +
 			client_param->memref.offset);
-		buffer_addr = mailbox_copy_alloc(buffer_addr, buffer_size);
-		if (!buffer_addr) {
-			ret = -ENOMEM;
+		
+		ret = set_operation_buffer(shared_mem, buffer_addr, buffer_size, index, op_params);
+		if (ret) {
+			tloge("set operation buffer failed\n");
 			break;
 		}
-		op_params->mb_pack->operation.mb_buffer[index] = buffer_addr;
-		op_params->mb_pack->operation.params[index].memref.buffer =
-			virt_to_phys(buffer_addr);
-		op_params->mb_pack->operation.buffer_h_addr[index] =
-			(uint64_t)virt_to_phys(buffer_addr) >> ADDR_TRANS_NUM;
+
 		op_params->mb_pack->operation.sharemem[index] = shared_mem;
 		get_sharemem_struct(shared_mem);
 		break;
@@ -528,8 +531,138 @@ static int alloc_for_ref_mem(const struct tc_call_params *call_params,
 	/* Change TEEC_MEMREF_PARTIAL_XXXXX  to TEE_PARAM_TYPE_MEMREF_XXXXX */
 	op_params->trans_paramtype[index] = param_type -
 		(TEEC_MEMREF_PARTIAL_INPUT - TEE_PARAM_TYPE_MEMREF_INPUT);
+
+	if (shared_mem->mem_type == RESERVED_TYPE) 
+		op_params->trans_paramtype[index] += 
+			(TEE_PARAM_TYPE_RESMEM_INPUT - TEE_PARAM_TYPE_MEMREF_INPUT);
 	return ret;
 }
+
+#ifdef CONFIG_NOCOPY_SHAREDMEM
+static int fill_shared_mem_info(void *start_vaddr, uint32_t pages_no,
+	uint32_t offset, uint32_t buffer_size, void *buff)
+{
+	struct pagelist_info *page_info = NULL;
+	struct page **pages = NULL;
+	uint64_t *phys_addr = NULL;
+	uint32_t page_num;
+	uint32_t i;
+
+	if (pages_no == 0)
+		return -EFAULT;
+	
+	pages = (struct page **)vmalloc(pages_no * sizeof(uint64_t));
+	if (pages == NULL)
+		return -EFAULT;
+	
+	down_read(&mm_sem_lock(current->mm));
+	page_num = get_user_pages((uintptr_t)start_vaddr, pages_no, FOLL_WRITE, pages, NULL);
+	up_read(&mm_sem_lock(current->mm));
+	if (page_num != pages_no) {
+		tloge("get page phy addr failed\n");
+		if (page_num > 0)
+			release_pages(pages, page_num);
+		vfree(pages);
+		return -EFAULT;
+	}
+
+	page_info = buff;
+	page_info->page_num = pages_no;
+	page_info->page_size = PAGE_SIZE;
+	page_info->sharedmem_offset = offset;
+	page_info->sharedmem_size = buffer_size;
+
+	phys_addr = (uint64_t*)buff + (sizeof(*page_info) / sizeof(uint64_t));
+	for (i = 0; i < pages_no; i++) {
+		struct page *page = pages[i];
+		if (page == NULL) {
+			release_pages(pages, page_num);
+			vfree(pages);
+			return -EFAULT;
+		}
+		phys_addr[i] = (uintptr_t)page_to_phys(page);
+	}
+
+	vfree(pages);
+	return 0;
+}
+
+static int check_buffer_for_sharedmem(uint32_t* buffer_size,
+	const union tc_ns_client_param *client_param, uint8_t kernel_params)
+{
+	if (read_from_client(buffer_size, sizeof(*buffer_size),
+		(uint32_t __user *)(uintptr_t)client_param->memref.size_addr,
+		sizeof(uint32_t), kernel_params)) {
+			tloge("copy size_addr failed\n");
+			return -EFAULT;
+	}
+
+	if (*buffer_size == 0 || *buffer_size > SZ_256M) {
+		tloge("invalid buffer size\n");
+		return -ENOMEM;
+	}
+
+    if ((client_param->memref.offset >= SZ_256M) ||
+        (UINT64_MAX - client_param->memref.buffer <= client_param->memref.offset)) {
+        tloge("invalid buff or offset\n");
+        return -EFAULT;
+        }
+	
+	return 0;
+}
+
+static int transfer_shared_mem(const struct tc_call_params *call_params, 
+	struct tc_op_params *op_params, uint8_t kernel_params,
+	uint32_t param_type, unsigned int index) 
+{
+	void *buff = NULL;
+	void *start_vaddr = NULL;
+	union tc_ns_client_param *client_param = NULL;
+	uint32_t buffer_size;
+	uint32_t pages_no;
+	uint32_t offset;
+	uint32_t buff_len;
+
+	if (index >= TEE_PARAM_NUM) 
+		return -EINVAL;
+	
+	client_param = &(call_params->context->params[index]);
+	if (check_buffer_for_sharedmem(&buffer_size, client_param, kernel_params))
+		return -EINVAL;
+	
+	buff = (void *)(uint64_t)(client_param->memref.buffer + client_param->memref.offset);
+	start_vaddr = (void *)(((uint64_t)buff) & PAGE_MASK);
+	offset = ((uint32_t)(uintptr_t)buff) & (~PAGE_MASK);
+	pages_no = PAGE_ALIGN(offset + buffer_size) / PAGE_SIZE;
+
+	buff_len = sizeof(struct pagelist_info) + (sizeof(uint64_t) * pages_no);
+	buff = mailbox_alloc(buff_len, MB_FLAG_ZERO);
+	if (buff == NULL)
+		return -EFAULT;
+	
+	if (fill_shared_mem_info(start_vaddr, pages_no, offset, buffer_size, buff)) {
+		mailbox_free(buff);
+		return -EFAULT;
+	}
+
+	op_params->local_tmpbuf[index].temp_buffer = buff;
+	op_params->local_tmpbuf[index].size = buff_len;
+
+	op_params->mb_pack->operation.params[index].memref.buffer = virt_to_phys(buff);
+	op_params->mb_pack->operation.buffer_h_addr[index] = (uint64_t)virt_to_phys(buff) >> ADDR_TRANS_NUM;
+	op_params->mb_pack->operation.params[index].memref.size = buff_len;
+	op_params->trans_paramtype[index] = param_type;
+	return 0;
+}
+#else
+static int transfer_shared_mem(const struct tc_call_params *call_params, 
+	struct tc_op_params *op_params, uint8_t kernel_params,
+	uint32_t param_type, unsigned int index) 
+{
+	tloge("invalid shared mem type\n");
+	return -1;
+}
+#endif
 
 static int transfer_client_value(const struct tc_call_params *call_params,
 	struct tc_op_params *op_params, uint8_t kernel_params,
@@ -618,6 +751,9 @@ static int alloc_operation(const struct tc_call_params *call_params,
 				kernel_params, param_type, index);
 		else if (param_type == TEEC_ION_SGLIST_INPUT)
 			ret = alloc_for_ion_sglist(call_params, op_params,
+				kernel_params, param_type, index);
+		else if (param_type == TEEC_MEMREF_SHARED_INOUT)
+			ret = transfer_shared_mem(call_params, op_params,
 				kernel_params, param_type, index);
 		else
 			tlogd("param type = TEEC_NONE\n");
@@ -717,6 +853,10 @@ static int update_for_ref_mem(const struct tc_call_params *call_params,
 		return -EFAULT;
 	}
 
+	/* reserved memory no need to copy */
+	if (operation->sharemem[index]->mem_type == RESERVED_TYPE)
+		return 0;
+
 	/* copy from mb_buffer to sharemem */
 	if (operation->mb_buffer[index] && orig_size >= buffer_size) {
 		void *buffer_addr =
@@ -797,6 +937,26 @@ static int update_client_operation(const struct tc_call_params *call_params,
 	return ret;
 }
 
+#ifdef CONFIG_NOCOPY_SHAREDMEM
+static void release_page(void *buf)
+{
+	uint32_t i;
+	uint64_t *phys_addr = NULL;
+	struct pagelist_info *page_info = NULL;
+	struct page *page = NULL;
+
+	page_info = buf;
+	phys_addr = (uint64_t *)buf + (sizeof(*page_info) / sizeof(uint64_t));
+	for (i = 0; i < page_info->page_num; i++) {
+		page = (struct page *)(uintptr_t)phys_to_page(phys_addr[i]);
+		if (page == NULL)
+			continue;
+        set_bit(PG_dirty, &page->flags);
+		put_page(page);
+	}
+}
+#endif
+
 static void free_operation(const struct tc_call_params *call_params,
 	struct tc_op_params *op_params)
 {
@@ -821,6 +981,11 @@ static void free_operation(const struct tc_call_params *call_params,
 				temp_buf = NULL;
 			}
 		} else if (is_ref_mem(param_type)) {
+			struct tc_ns_shared_mem *shm = operation->sharemem[index];
+			if (shm != NULL && shm->mem_type == RESERVED_TYPE) {
+				put_sharemem_struct(operation->sharemem[index]);
+				continue;
+			}
 			put_sharemem_struct(operation->sharemem[index]);
 			if (operation->mb_buffer[index])
 				mailbox_free(operation->mb_buffer[index]);
@@ -833,6 +998,14 @@ static void free_operation(const struct tc_call_params *call_params,
 				mailbox_free(temp_buf);
 				temp_buf = NULL;
 			}
+		} else if (param_type == TEEC_MEMREF_SHARED_INOUT) {
+#ifdef CONFIG_NOCOPY_SHAREDMEM
+			temp_buf = local_tmpbuf[index].temp_buffer;
+			if (temp_buf != NULL) {
+				release_page(temp_buf);
+				mailbox_free(temp_buf);
+			}
+#endif
 		}
 	}
 }
@@ -896,9 +1069,7 @@ static int init_smc_cmd(const struct tc_call_params *call_params,
 	smc_cmd->err_origin = context->returns.origin;
 	smc_cmd->started = context->started;
 	smc_cmd->ca_pid = current->pid;
-
-	if (tzmp2_uid(context, smc_cmd, global) != EOK)
-		tloge("caution! tzmp uid failed !\n\n");
+	smc_cmd->pid = current->tgid;
 
 	tlogv("current uid is %u\n", smc_cmd->uid);
 	if (context->param_types) {
@@ -911,6 +1082,10 @@ static int init_smc_cmd(const struct tc_call_params *call_params,
 		smc_cmd->operation_h_phys = 0;
 	}
 	smc_cmd->login_method = context->login.method;
+
+	/* if smc from kernel CA, set login method to TEEK_LOGIN_IDENTIFY */
+	if (call_params->dev->kernel_api == TEE_REQ_FROM_KERNEL_MODE)
+		smc_cmd->login_method = TEEK_LOGIN_IDENTIFY;
 
 	return 0;
 }
@@ -934,16 +1109,6 @@ static int check_login_for_encrypt(const struct tc_call_params *call_params,
 	struct mb_cmd_pack *mb_pack = op_params->mb_pack;
 
 	if (need_check_login(call_params, op_params) && sess) {
-#ifdef CONFIG_AUTH_ENHANCE
-		int ret = do_encryption(sess->auth_hash_buf,
-			sizeof(sess->auth_hash_buf),
-			MAX_SHA_256_SZ * (NUM_OF_SO + 1),
-			sess->secure_info.crypto_info.key);
-		if (ret) {
-			tloge("hash encryption failed ret=%d\n", ret);
-			return ret;
-		}
-#endif
 		if (memcpy_s(mb_pack->login_data, sizeof(mb_pack->login_data),
 			sess->auth_hash_buf,
 			sizeof(sess->auth_hash_buf))) {
@@ -1017,6 +1182,12 @@ static void release_tc_call_resource(const struct tc_call_params *call_params,
 	call_params->context->returns.code = tee_ret;
 	call_params->context->returns.origin = op_params->smc_cmd->err_origin;
 
+	/*
+	* 1. when CA invoke command and crash, Gtask release service node
+	* then del ion won't be triggered, so here tzdriver need to kill ion;
+	*2. when ta crash, tzdriver also need to kill ion
+	*/
+
 	if (op_params->op_inited)
 		free_operation(call_params, op_params);
 
@@ -1037,38 +1208,21 @@ static int config_smc_cmd_context(const struct tc_call_params *call_params,
 	if (ret)
 		return ret;
 
-	ret = load_security_enhance_info(call_params, op_params);
-	if (ret)
-		tloge("load_security_enhance_info failed\n");
-
 	return ret;
 }
 
 static int handle_ta_pending(const struct tc_call_params *call_params,
 	struct tc_op_params *op_params, int *tee_ret)
 {
-	int ret;
-
 	if (*tee_ret != TEEC_PENDING)
 		return 0;
 
 	while (*tee_ret == TEEC_PENDING) {
 		pend_ca_thread(call_params->sess, op_params->smc_cmd);
-		ret = append_teec_token(call_params, op_params);
-		if (ret) {
-			tloge("append teec's member failed\n");
-			return ret;
-		}
-
 		*tee_ret = tc_ns_smc_with_no_nr(op_params->smc_cmd);
-		ret = post_process_token(call_params, op_params);
-		if (ret) {
-			tloge("no nr smc post proc token failed\n");
-			return ret;
-		}
 	}
 
-	return ret;
+	return 0;
 }
 
 static int post_proc_smc_return(const struct tc_call_params *call_params,
@@ -1077,7 +1231,7 @@ static int post_proc_smc_return(const struct tc_call_params *call_params,
 	int ret;
 
 	if (tee_ret) {
-		tloge("smc call ret 0x%x, cmd ret val 0x%x, origin %d\n", tee_ret,
+		tloge("smc call ret 0x%x, cmd ret val 0x%x, origin %u\n", tee_ret,
 			op_params->smc_cmd->ret_val, op_params->smc_cmd->err_origin);
 		/* same as libteec_vendor, err from TEE, set ret positive */
 		ret = EFAULT;
@@ -1121,12 +1275,6 @@ int tc_client_call(const struct tc_call_params *call_params)
 	tee_ret = tc_ns_smc(op_params.smc_cmd);
 
 	reset_session_id(call_params, &op_params, tee_ret);
-
-	ret = post_process_token(call_params, &op_params);
-	if (ret != EOK) {
-		tloge("post process token failed\n");
-		goto free_src;
-	}
 
 	ret = handle_ta_pending(call_params, &op_params, &tee_ret);
 	if (ret)

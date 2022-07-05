@@ -3,7 +3,7 @@
  *
  * agent manager function, such as register and send cmd
  *
- * Copyright (c) 2012-2021 Huawei Technologies Co., Ltd.
+ * Copyright (c) 2012-2022 Huawei Technologies Co., Ltd.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -50,6 +50,7 @@
 #include "tc_client_driver.h"
 #include "cmdmonitor.h"
 #include "ko_adapt.h"
+#include "tz_kthread_affinity.h"
 
 #ifdef CONFIG_CMS_CAHASH_AUTH
 #define HASH_FILE_MAX_SIZE         CONFIG_HASH_FILE_SIZE
@@ -58,7 +59,6 @@
 #endif
 #define AGENT_BUFF_SIZE            (4 * 1024)
 #define AGENT_MAX                  32
-#define MAX_PATH_SIZE              512
 #define PAGE_ORDER_RATIO           2
 
 static struct list_head g_tee_agent_list;
@@ -70,44 +70,12 @@ struct agent_control {
 
 static struct agent_control g_agent_control;
 
-struct ca_info {
-	char path[MAX_PATH_SIZE];
-	uint32_t uid;
-	uint32_t agent_id;
-};
-
-static struct ca_info g_allowed_ext_agent_ca[] = {
-};
-
-static int is_allowed_agent_ca(const struct ca_info *ca,
+int __attribute__((weak)) is_allowed_agent_ca(const struct ca_info *ca,
 	bool check_agent_id)
 {
-	uint32_t i;
-	struct ca_info *tmp_ca = g_allowed_ext_agent_ca;
-	const uint32_t nr = ARRAY_SIZE(g_allowed_ext_agent_ca);
-
-	if (!check_agent_id) {
-		for (i = 0; i < nr; i++) {
-			if (!strncmp(ca->path, tmp_ca->path,
-				strlen(tmp_ca->path) + 1) &&
-				ca->uid == tmp_ca->uid)
-				return 0;
-			tmp_ca++;
-		}
-	} else {
-		for (i = 0; i < nr; i++) {
-			if (!strncmp(ca->path, tmp_ca->path,
-				strlen(tmp_ca->path) + 1) &&
-				ca->uid == tmp_ca->uid &&
-				ca->agent_id == tmp_ca->agent_id)
-				return 0;
-			tmp_ca++;
-		}
-	}
-	tlogd("ca-uid is %u, ca_path is %s, agent id is %x\n", ca->uid,
-		ca->path, ca->agent_id);
-
-	return -EACCES;
+	(void)ca;
+	(void)check_agent_id;
+	return -EFAULT;
 }
 
 static int check_mm_struct(struct mm_struct *mm)
@@ -618,10 +586,15 @@ int tc_ns_sync_sys_time(const struct tc_ns_client_time *tc_ns_time)
 		return -ENOMEM;
 	}
 
+	mb_pack->operation.paramtypes = TEE_PARAM_TYPE_VALUE_INPUT;
+	mb_pack->operation.params[0].value.a = tmp_tc_ns_time.seconds;
+	mb_pack->operation.params[0].value.b = tmp_tc_ns_time.millis;
+
 	smc_cmd.cmd_type = CMD_TYPE_GLOBAL;
 	smc_cmd.cmd_id = GLOBAL_CMD_ID_ADJUST_TIME;
-	smc_cmd.err_origin = tmp_tc_ns_time.seconds;
-	smc_cmd.ret_val = (int)tmp_tc_ns_time.millis;
+	smc_cmd.operation_phys = virt_to_phys(&mb_pack->operation);
+	smc_cmd.operation_h_phys = 
+		(uint64_t)virt_to_phys(&mb_pack->operation) >> ADDR_TRANS_NUM;
 
 	if (tc_ns_smc(&smc_cmd)) {
 		tloge("tee adjust time failed, return error\n");
@@ -702,7 +675,6 @@ static void init_restart_agent_node(struct tc_ns_dev_file *dev_file,
 	tloge("agent: 0x%x restarting\n", event_data->agent_id);
 	event_data->ret_flag = 0;
 	event_data->owner = dev_file;
-	event_data->pid = current->tgid;
 	atomic_set(&event_data->agent_ready, AGENT_REGISTERED);
 	init_waitqueue_head(&(event_data->wait_event_wq));
 	init_waitqueue_head(&(event_data->send_response_wq));
@@ -732,7 +704,6 @@ static int create_new_agent_node(struct tc_ns_dev_file *dev_file,
 	(*event_data)->agent_buff_kernel = *agent_buff;
 	(*event_data)->agent_buff_size = agent_buff_size;
 	(*event_data)->owner = dev_file;
-	(*event_data)->pid = current->tgid;
 	atomic_set(&(*event_data)->agent_ready, AGENT_REGISTERED);
 	init_waitqueue_head(&(*event_data)->wait_event_wq);
 	init_waitqueue_head(&(*event_data)->send_response_wq);
@@ -767,7 +738,7 @@ static unsigned long agent_buffer_map(unsigned long buffer, uint32_t size)
 		return user_addr;
 	}
 
-	down_read(&current->mm->mmap_sem);
+	down_read(&mm_sem_lock(current->mm));
 	vma = find_vma(current->mm, user_addr);
 	if (!vma) {
 		tloge("user_addr is not valid in vma");
@@ -781,10 +752,10 @@ static unsigned long agent_buffer_map(unsigned long buffer, uint32_t size)
 		goto err_out;
 	}
 
-	up_read(&current->mm->mmap_sem);
+	up_read(&mm_sem_lock(current->mm));
 	return user_addr;
 err_out:
-	up_read(&current->mm->mmap_sem);
+	up_read(&mm_sem_lock(current->mm));
 	if (vm_munmap(user_addr, size))
 		tloge("munmap failed\n");
 	return -EFAULT;
@@ -808,21 +779,8 @@ static bool is_valid_agent(unsigned int agent_id,
 	return true;
 }
 
-void clean_agent_pid_info(struct tc_ns_dev_file *dev_file)
-{
-	struct smc_event_data *agent_node = NULL;
-	unsigned long flags;
-
-	spin_lock_irqsave(&g_agent_control.lock, flags);
-	list_for_each_entry(agent_node, &g_agent_control.agent_list, head) {
-		if (agent_node->owner == dev_file)
-			agent_node->pid = 0;
-	}
-	spin_unlock_irqrestore(&g_agent_control.lock, flags);
-}
-
 static int is_agent_already_exist(unsigned int agent_id,
-	struct smc_event_data **event_data, bool *find_flag)
+	struct smc_event_data **event_data, struct tc_ns_dev_file *dev_file, bool *find_flag)
 {
 	unsigned long flags;
 	bool flag = false;
@@ -831,13 +789,18 @@ static int is_agent_already_exist(unsigned int agent_id,
 	spin_lock_irqsave(&g_agent_control.lock, flags);
 	list_for_each_entry(agent_node, &g_agent_control.agent_list, head) {
 		if (agent_node->agent_id == agent_id) {
-			if (agent_node->pid == current->tgid) {
+			if (atomic_read(&agent_node->agent_ready) != AGENT_CRASHED) {
 				tloge("no allow agent proc to reg twice\n");
 				spin_unlock_irqrestore(&g_agent_control.lock, flags);
 				return -EINVAL;
 			}
 			flag = true;
 			get_agent_event(agent_node);
+			/*
+	 		* We find the agent event_data aready in agent_list, it indicate agent
+	 		* didn't unregister normally, so the event_data will be reused.
+	 		*/
+			init_restart_agent_node(dev_file, agent_node);
 			break;
 		}
 	}
@@ -934,15 +897,10 @@ int tc_ns_register_agent(struct tc_ns_dev_file *dev_file,
 
 	size_align = ALIGN(buffer_size, SZ_4K);
 
-	if (is_agent_already_exist(agent_id, &event_data, &find_flag))
+	if (is_agent_already_exist(agent_id, &event_data, dev_file, &find_flag))
 		return ret;
-	/*
-	 * We find the agent event_data aready in agent_list, it indicate agent
-	 * didn't unregister normally, so the event_data will be reused.
-	 */
-	if (find_flag) {
-		init_restart_agent_node(dev_file, event_data);
-	} else {
+
+	if (!find_flag) {
 		ret = create_new_agent_node(dev_file, &event_data,
 			agent_id, &agent_buff, size_align);
 		if (ret)
@@ -998,18 +956,9 @@ static int check_for_unregister_agent(unsigned int agent_id)
 	return 0;
 }
 
-static bool is_third_party_agent(unsigned int agent_id)
+bool __attribute__((weak)) is_third_party_agent(unsigned int agent_id)
 {
-	uint32_t i;
-	struct ca_info *tmp_ca = g_allowed_ext_agent_ca;
-	const uint32_t nr = ARRAY_SIZE(g_allowed_ext_agent_ca);
-
-	for (i = 0; i < nr; i++) {
-		if (tmp_ca->agent_id == agent_id)
-			return true;
-		tmp_ca++;
-	}
-
+	(void)agent_id;
 	return false;
 }
 
@@ -1186,7 +1135,7 @@ static int def_tee_agent_run(struct tee_agent_kernel_ops *agent_instance)
 
 	/* 2. Creat thread to run agent */
 	agent_instance->agent_thread =
-		kthread_run(def_tee_agent_work, agent_instance,
+		kthread_create(def_tee_agent_work, agent_instance,
 			"agent_%s", agent_instance->agent_name);
 	if (IS_ERR_OR_NULL(agent_instance->agent_thread)) {
 		tloge("kthread creat fail\n");
@@ -1194,6 +1143,8 @@ static int def_tee_agent_run(struct tee_agent_kernel_ops *agent_instance)
 		agent_instance->agent_thread = NULL;
 		goto out;
 	}
+	tz_kthread_bind_mask(agent_instance->agent_thread);
+	wake_up_process(agent_instance->agent_thread);
 	return 0;
 
 out:

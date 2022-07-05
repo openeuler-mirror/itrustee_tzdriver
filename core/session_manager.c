@@ -3,7 +3,7 @@
  *
  * function for session management
  *
- * Copyright (c) 2012-2021 Huawei Technologies Co., Ltd.
+ * Copyright (c) 2012-2022 Huawei Technologies Co., Ltd.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -47,10 +47,10 @@
 #include "gp_ops.h"
 #include "tc_ns_log.h"
 #include "teek_client_constants.h"
-#include "security_auth_enhance.h"
+#include "client_hash_auth.h"
 #include "mailbox_mempool.h"
 #include "tc_client_driver.h"
-#include "teec_daemon_auth.h"
+#include "tee_trace_event.h"
 #include "tz_kthread_affinity.h"
 
 static DEFINE_MUTEX(g_load_app_lock);
@@ -88,17 +88,6 @@ void put_session_struct(struct tc_ns_session *session)
 	if (!session || !atomic_dec_and_test(&session->usage))
 		return;
 
-#ifdef CONFIG_AUTH_ENHANCE
-	if (session->teec_token.token_buffer) {
-		if (memset_s(
-			session->teec_token.token_buffer,
-			session->teec_token.token_len, 0,
-			session->teec_token.token_len))
-			tloge("Caution, memset failed!\n");
-		kfree(session->teec_token.token_buffer);
-		session->teec_token.token_buffer = NULL;
-	}
-#endif
 	if (memset_s(session, sizeof(*session), 0, sizeof(*session)))
 		tloge("Caution, memset failed!\n");
 	kfree(session);
@@ -203,24 +192,6 @@ struct tc_ns_session *tc_find_session_withowner(
 			session->owner == dev_file)
 			return session;
 	}
-	return NULL;
-}
-
-static struct tc_ns_session *tc_find_and_del_session(
-	struct tc_ns_service *service, struct tc_ns_dev_file *dev)
-{
-	struct tc_ns_session *session = NULL;
-
-	mutex_lock(&service->session_lock);
-	list_for_each_entry(session, &service->session_list, head) {
-		if (session->owner == dev) {
-			get_session_struct(session);
-			list_del(&session->head);
-			mutex_unlock(&service->session_lock);
-			return session;
-		}
-	}
-	mutex_unlock(&service->session_lock);
 	return NULL;
 }
 
@@ -361,9 +332,7 @@ int tc_ns_load_secfile(struct tc_ns_dev_file *dev_file,
 	} else if (ioctl_arg.secfile_type == LOAD_LIB) {
 		ret = tc_ns_load_image(dev_file, ioctl_arg.file_buffer,
 			ioctl_arg.file_size, NULL, ioctl_arg.secfile_type);
-	} else if (ioctl_arg.secfile_type == LOAD_DYNAMIC_DRV) {
-		ret = check_teecd_access();
-		if (ret == EOK)
+	} else if (ioctl_arg.secfile_type == LOAD_DYNAMIC_DRV || ioctl_arg.secfile_type == LOAD_SERVICE) {
 			ret = tc_ns_load_image(dev_file, ioctl_arg.file_buffer,
 				ioctl_arg.file_size, NULL, ioctl_arg.secfile_type);
 	} else {
@@ -859,31 +828,9 @@ static int proc_open_session(struct tc_ns_dev_file *dev_file,
 		return ret;
 	}
 
-	ret = get_session_secure_params(dev_file, context, session);
-	if (ret) {
-		tloge("Get session secure parameters failed, ret = %d\n", ret);
-		/* Clean this session secure information */
-		clean_session_secure_information(session);
-		mutex_unlock(&service->operation_lock);
-		return ret;
-	}
-#ifdef CONFIG_AUTH_ENHANCE
-	session->teec_token.token_buffer =
-		kzalloc(TOKEN_BUFFER_LEN, GFP_KERNEL);
-	session->teec_token.token_len = TOKEN_BUFFER_LEN;
-	if (ZERO_OR_NULL_PTR((unsigned long)(uintptr_t)
-		session->teec_token.token_buffer)) {
-		tloge("kzalloc %d bytes token failed\n", TOKEN_BUFFER_LEN);
-		/* Clean this session secure information */
-		clean_session_secure_information(session);
-		mutex_unlock(&service->operation_lock);
-		return -ENOMEM;
-	}
-#endif
 	ret = tc_client_call(&params);
 	if (ret) {
 		/* Clean this session secure information */
-		clean_session_secure_information(session);
 		mutex_unlock(&service->operation_lock);
 		tloge("smc call returns error, ret=0x%x\n", ret);
 		return ret;
@@ -898,21 +845,12 @@ static int proc_open_session(struct tc_ns_dev_file *dev_file,
 	return ret;
 }
 
-void free_session_token_buf(struct tc_ns_session *session)
+static void clear_context_param(struct tc_ns_client_context *context)
 {
-#ifdef CONFIG_AUTH_ENHANCE
-	if (session &&
-		session->teec_token.token_buffer) {
-		if (memset_s(session->teec_token.token_buffer,
-			session->teec_token.token_len,
-			0, session->teec_token.token_len))
-			tloge("Caution, memset failed!\n");
-		kfree(session->teec_token.token_buffer);
-		session->teec_token.token_buffer = NULL;
-	}
-#else
-	(void)session;
-#endif
+	context->params[2].memref.size_addr = 0;
+	context->params[2].memref.buffer = 0;
+	context->params[3].memref.size_addr = 0;
+	context->params[3].memref.buffer = 0;
 }
 
 int tc_ns_open_session(struct tc_ns_dev_file *dev_file,
@@ -930,14 +868,15 @@ int tc_ns_open_session(struct tc_ns_dev_file *dev_file,
 
 	ret = check_login_method(dev_file, context, &flags);
 	if (ret)
-		return ret;
+		goto err_clear_param;
 
 	context->cmd_id = GLOBAL_CMD_ID_OPEN_SESSION;
 
 	service = find_service(dev_file, context);
 	if (!service) {
 		tloge("find service failed\n");
-		return -ENOMEM;
+		ret = -ENOMEM;
+		goto err_clear_param;
 	}
 
 	session = kzalloc(sizeof(*session), GFP_KERNEL);
@@ -946,20 +885,29 @@ int tc_ns_open_session(struct tc_ns_dev_file *dev_file,
 		mutex_lock(&dev_file->service_lock);
 		del_service_from_dev(dev_file, service);
 		mutex_unlock(&dev_file->service_lock);
-		return -ENOMEM;
+		ret = -ENOMEM;
+		goto err_clear_param;
 	}
 	mutex_init(&session->ta_session_lock);
 
+	ret = calc_client_auth_hash(dev_file, context, session);
+	if (ret) {
+		tloge("calc client auth hash failed\n");
+		goto err_free_rsrc;
+	}
+
 	ret = proc_open_session(dev_file, context, service, session, flags);
 	if (!ret)
-		return ret;
-	free_session_token_buf(session);
+		goto err_clear_param;
 
+err_free_rsrc:
 	mutex_lock(&dev_file->service_lock);
 	del_service_from_dev(dev_file, service);
 	mutex_unlock(&dev_file->service_lock);
 
 	kfree(session);
+err_clear_param:
+	clear_context_param(context);
 	return ret;
 }
 
@@ -1023,26 +971,24 @@ static int close_session(struct tc_ns_dev_file *dev,
 static void close_session_in_service_list(struct tc_ns_dev_file *dev,
 	struct tc_ns_service *service)
 {
-	int ret;
+	struct tc_ns_session *tmp_session = NULL;
 	struct tc_ns_session *session = NULL;
+	int ret;
 
-	session = tc_find_and_del_session(service, dev);
-	while (session) {
+	list_for_each_entry_safe(session, tmp_session,
+		&service->session_list, head) {
+		if (session->owner != dev)
+			continue;
 		ret = close_session(dev, session, service->uuid,
 			(unsigned int)UUID_LEN, session->session_id);
 		if (ret)
 			tloge("close session smc failed when close fd!\n");
-#ifdef CONFIG_AUTH_ENHANCE
-		/* Clean session secure information */
-		if (memset_s(&session->secure_info,
-			sizeof(session->secure_info), 0,
-			sizeof(session->secure_info)))
-			tloge("memset error\n");
-#endif
+		
+		mutex_lock(&service->session_lock);
+		list_del(&session->head);
+		mutex_unlock(&service->session_lock);
 
 		put_session_struct(session); /* pair with find session */
-		put_session_struct(session); /* pair with open session */
-		session = tc_find_and_del_session(service, dev);
 	}
 }
 
@@ -1139,13 +1085,7 @@ int tc_ns_close_session(struct tc_ns_dev_file *dev_file,
 		mutex_unlock(&session->ta_session_lock);
 		if (ret2)
 			tloge("close session smc failed!\n");
-#ifdef CONFIG_AUTH_ENHANCE
-		/* Clean this session secure information */
-		if (memset_s(&session->secure_info,
-			sizeof(session->secure_info),
-			0, sizeof(session->secure_info)))
-			tloge("close session memset error\n");
-#endif
+
 		mutex_lock(&service->session_lock);
 		list_del(&session->head);
 		mutex_unlock(&service->session_lock);
@@ -1254,7 +1194,9 @@ int tc_client_session_ioctl(struct file *file, unsigned int cmd,
 		ret = tc_ns_close_session(dev_file, &context);
 		break;
 	case TC_NS_CLIENT_IOCTL_SEND_CMD_REQ:
+		tee_trace_add_event(INVOKE_CMD_START, 0);
 		ret = ioctl_session_send_cmd(dev_file, &context, argp);
+		tee_trace_add_event(INVOKE_CMD_END, 0);
 		break;
 	default:
 		freezer_count();

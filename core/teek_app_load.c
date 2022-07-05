@@ -3,7 +3,7 @@
  *
  * function declaration for load app operations for kernel CA.
  *
- * Copyright (c) 2021-2021 Huawei Technologies Co., Ltd.
+ * Copyright (c) 2021-2022 Huawei Technologies Co., Ltd.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -26,7 +26,6 @@
 static int32_t teek_open_app_file(struct file *fp, char **file_buf, uint32_t total_img_len)
 {
 	loff_t pos = 0;
-	mm_segment_t old_fs;
 	uint32_t read_size;
 	char *file_buffer = NULL;
 
@@ -41,12 +40,7 @@ static int32_t teek_open_app_file(struct file *fp, char **file_buf, uint32_t tot
 		return TEEC_ERROR_GENERIC;
 	}
 
-	old_fs = get_fs();
-	set_fs(KERNEL_DS);
-
-	read_size = (uint32_t)koadpt_vfs_read(fp, file_buffer, total_img_len, &pos);
-
-	set_fs(old_fs);
+	read_size = (uint32_t)kernel_read(fp, file_buffer, total_img_len, &pos);
 
 	if (read_size != total_img_len) {
 		tloge("read ta file failed, read size/total size=%u/%u\n", read_size, total_img_len);
@@ -76,7 +70,10 @@ static int32_t teek_read_app(const char *load_file, char **file_buf, uint32_t *f
 	if (ret != TEEC_SUCCESS)
 		tloge("do read app fail\n");
 
-	filp_close(fp, 0);
+	if (fp != NULL) {
+		filp_close(fp, 0);
+		fp = NULL;
+	}
 
 	return ret;
 }

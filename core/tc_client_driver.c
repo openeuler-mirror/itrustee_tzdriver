@@ -3,7 +3,7 @@
  *
  * function for proc open,close session and invoke
  *
- * Copyright (c) 2012-2021 Huawei Technologies Co., Ltd.
+ * Copyright (c) 2012-2022 Huawei Technologies Co., Ltd.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -68,14 +68,14 @@
 #include "tc_ns_client.h"
 #include "mailbox_mempool.h"
 #include "tz_spi_notify.h"
-#include "teec_daemon_auth.h"
-#include "security_auth_enhance.h"
+#include "client_hash_auth.h"
 #include "auth_base_impl.h"
 #include "tlogger.h"
 #include "session_manager.h"
 #include "ko_adapt.h"
 #include "tz_pm.h"
 #include "tz_kthread_affinity.h"
+#include "reserved_mempool.h"
 
 static dev_t g_tc_ns_client_devt;
 static struct class *g_driver_class;
@@ -155,16 +155,16 @@ static int tc_ns_get_tee_version(const struct tc_ns_dev_file *dev_file,
 static int get_pack_name_len(struct tc_ns_dev_file *dev_file,
 	const uint8_t *cert_buffer)
 {
-	if (memcpy_s(&dev_file->pkg_name_len, sizeof(dev_file->pkg_name_len),
-		cert_buffer, sizeof(dev_file->pkg_name_len)))
+	uint32_t tmp_len = 0;
+	dev_file->pkg_name_len = 0;
+	if (memcpy_s(&tmp_len, sizeof(tmp_len), cert_buffer, sizeof(tmp_len)))
 		return -EFAULT;
 
-	if (!dev_file->pkg_name_len ||
-	    dev_file->pkg_name_len >= MAX_PACKAGE_NAME_LEN) {
-		tloge("invalid pack name len: %u\n", dev_file->pkg_name_len);
+	if (tmp_len == 0 || tmp_len >= MAX_PACKAGE_NAME_LEN) {
+		tloge("invalid pack name len: %u\n", tmp_len);
 		return -EINVAL;
 	}
-
+	dev_file->pkg_name_len = tmp_len;
 	tlogd("package name len is %u\n", dev_file->pkg_name_len);
 
 	return 0;
@@ -173,15 +173,16 @@ static int get_pack_name_len(struct tc_ns_dev_file *dev_file,
 static int get_public_key_len(struct tc_ns_dev_file *dev_file,
 	const uint8_t *cert_buffer)
 {
-	if (memcpy_s(&dev_file->pub_key_len, sizeof(dev_file->pub_key_len),
-		cert_buffer, sizeof(dev_file->pub_key_len)))
+	uint32_t tmp_len = 0;
+	dev_file->pub_key_len = 0;
+	if (memcpy_s(&tmp_len, sizeof(tmp_len), cert_buffer, sizeof(tmp_len)))
 		return -EFAULT;
 
-	if (dev_file->pub_key_len > MAX_PUBKEY_LEN) {
-		tloge("invalid public key len: %u\n", dev_file->pub_key_len);
+	if (tmp_len > MAX_PUBKEY_LEN) {
+		tloge("invalid public key len: %u\n", tmp_len);
 		return -EINVAL;
 	}
-
+	dev_file->pub_key_len = tmp_len;
 	tlogd("publick key len is %u\n", dev_file->pub_key_len);
 
 	return 0;
@@ -227,11 +228,6 @@ static bool is_cert_buffer_size_valid(int cert_buffer_size)
 static int alloc_login_buf(struct tc_ns_dev_file *dev_file,
 	uint8_t **cert_buffer, unsigned int *cert_buffer_size)
 {
-	if (check_teecd_access()) {
-		tloge("tc client login verification failed!\n");
-		return -EACCES;
-	}
-
 	*cert_buffer_size = (unsigned int)(MAX_PACKAGE_NAME_LEN +
 		MAX_PUBKEY_LEN + sizeof(dev_file->pkg_name_len) +
 		sizeof(dev_file->pub_key_len));
@@ -414,16 +410,16 @@ static void release_vma_shared_mem(struct tc_ns_dev_file *dev_file,
 		if (shared_mem) {
 			if (shared_mem->user_addr ==
 				(void *)(uintptr_t)vma->vm_start) {
-				shared_mem->user_addr = NULL;
+				shared_mem->user_addr = INVALID_MAP_ADDR;
 				find = true;
 			} else if (shared_mem->user_addr_ca ==
 				(void *)(uintptr_t)vma->vm_start) {
-				shared_mem->user_addr_ca = NULL;
+				shared_mem->user_addr_ca = INVALID_MAP_ADDR;
 				find = true;
 			}
 
-			if (!shared_mem->user_addr &&
-				!shared_mem->user_addr_ca)
+			if ((shared_mem->user_addr == INVALID_MAP_ADDR) &&
+				(shared_mem->user_addr_ca == INVALID_MAP_ADDR))
 				list_del(&shared_mem->head);
 
 			/* pair with tc client mmap */
@@ -485,8 +481,8 @@ static struct tc_ns_shared_mem *find_sharedmem(
 			 * 1. this shared mem is already mapped
 			 * 2. remap a different size shared_mem
 			 */
-			if (shm_tmp->user_addr_ca ||
-				vma->vm_end - vma->vm_start != shm_tmp->len) {
+			if ((shm_tmp->user_addr_ca != INVALID_MAP_ADDR)||
+				(vma->vm_end - vma->vm_start != shm_tmp->len)) {
 				tloge("already remap once!\n");
 				return NULL;
 			}
@@ -505,6 +501,14 @@ static int remap_shared_mem(struct vm_area_struct *vma,
 	const struct tc_ns_shared_mem *shared_mem)
 {
 	int ret;
+	if (shared_mem->mem_type == RESERVED_TYPE) {
+		unsigned long pfn = res_mem_virt_to_phys((uintptr_t)(shared_mem->kernel_addr)) >> PAGE_SHIFT;
+		unsigned long size = vma->vm_end - vma->vm_start;
+		ret = remap_pfn_range(vma, vma->vm_start, pfn, size, vma->vm_page_prot); // PAGE_SHARED
+		if (ret)
+			tloge("remap pfn for user failed, ret %d", ret);
+		return ret;
+	}
 
 	vma->vm_flags |= VM_USERMAP;
 	ret = remap_vmalloc_range(vma, shared_mem->kernel_addr, 0);
@@ -757,12 +761,6 @@ static int tc_client_open(struct inode *inode, struct file *file)
 	int ret;
 	struct tc_ns_dev_file *dev = NULL;
 
-	ret = check_teecd_access();
-	if (ret) {
-		tloge(KERN_ERR "teecd service may be exploited 0x%x\n", ret);
-		return -EACCES;
-	}
-
 	g_teecd_task = current->group_leader;
 	file->private_data = NULL;
 	ret = tc_ns_client_open(&dev, TEE_REQ_FROM_USER_MODE);
@@ -789,7 +787,6 @@ static int tc_client_close(struct inode *inode, struct file *file)
 	int ret = 0;
 	struct tc_ns_dev_file *dev = file->private_data;
 
-	clean_agent_pid_info(dev);
 	if (g_teecd_task == current->group_leader && !tc_ns_get_uid()) {
 		/* for teecd close fd */
 		if ((g_teecd_task->flags & PF_EXITING) ||
@@ -965,6 +962,10 @@ static int tc_ns_client_init(struct device **class_dev)
 	ret = load_hw_info();
 	if (ret)
 		return ret;
+	
+	ret = load_reserved_mem();
+	if (ret)
+		return ret;
 
 	if (alloc_chrdev_region(&g_tc_ns_client_devt, 0, 1,
 		TC_NS_CLIENT_DEV)) {
@@ -1016,6 +1017,12 @@ static int tc_teeos_init(struct device *class_dev)
 		return ret;
 	}
 
+	ret = reserved_mempool_init();
+	if (ret) {
+		tloge("reserved memory init failed\n");
+		goto smc_data_free;
+	}
+
 	ret = mailbox_mempool_init();
 	if (ret) {
 		tloge("tz mailbox init failed\n");
@@ -1025,11 +1032,12 @@ static int tc_teeos_init(struct device *class_dev)
 	ret = tz_spi_init(class_dev, g_dev_node);
 	if (ret) {
 		tloge("tz spi init failed\n");
-		goto release_mailbox;
+		goto release_mempool;
 	}
 	return 0;
-release_mailbox:
+release_mempool:
 	mailbox_mempool_destroy();
+	free_reserved_mempool();
 smc_data_free:
 	smc_free_data();
 	return ret;
@@ -1037,7 +1045,7 @@ smc_data_free:
 
 static void tc_re_init(const struct device *class_dev)
 {
-	int ret = 0;
+	int ret;
 
 	agent_init();
 
@@ -1097,6 +1105,7 @@ static void tc_exit(void)
 	exit_tlogger_service();
 #endif
 	mailbox_mempool_destroy();
+	free_reserved_mempool();
 	tee_exit_shash_handle();
 }
 

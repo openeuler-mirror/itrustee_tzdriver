@@ -3,7 +3,7 @@
  *
  * cmdmonitor function, monitor every cmd which is sent to TEE.
  *
- * Copyright (c) 2012-2021 Huawei Technologies Co., Ltd.
+ * Copyright (c) 2012-2022 Huawei Technologies Co., Ltd.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -38,12 +38,6 @@
 #include "log_cfg_api.h"
 #include "tz_kthread_affinity.h"
 
-static const char g_cmd_monitor_white_table[][TASK_COMM_LEN] = {
-};
-
-static const uint32_t g_white_table_thread_num =
-	sizeof(g_cmd_monitor_white_table) / TASK_COMM_LEN;
-
 static int g_cmd_need_archivelog;
 static LIST_HEAD(g_cmd_monitor_list);
 static int g_cmd_monitor_list_size;
@@ -57,12 +51,8 @@ static DEFINE_MUTEX(g_cmd_monitor_lock);
 static struct workqueue_struct *g_cmd_monitor_wq;
 static struct delayed_work g_cmd_monitor_work;
 static struct delayed_work g_cmd_monitor_work_archive;
+static struct delayed_work g_mem_stat;
 static int g_tee_detect_ta_crash;
-
-enum {
-	TYPE_CRASH_TA = 1,
-	TYPE_CRASH_TEE = 2,
-};
 
 static void get_time_spec(struct time_spec *time)
 {
@@ -73,6 +63,11 @@ static void get_time_spec(struct time_spec *time)
 #endif
 }
 
+static void schedule_memstat_work(struct delayed_work *work, unsigned long delay)
+{
+	schedule_delayed_work(work, delay);
+}
+
 static void schedule_cmd_monitor_work(struct delayed_work *work,
 	unsigned long delay)
 {
@@ -80,6 +75,11 @@ static void schedule_cmd_monitor_work(struct delayed_work *work,
 		queue_delayed_work(g_cmd_monitor_wq, work, delay);
 	else
 		schedule_delayed_work(work, delay);
+}
+
+void tzdebug_memstat(void)
+{
+	schedule_memstat_work(&g_mem_stat, usecs_to_jiffies(S_TO_MS));
 }
 
 void tzdebug_archivelog(void)
@@ -126,20 +126,6 @@ static int get_pid_name(pid_t pid, char *comm, size_t size)
 	return sret;
 }
 
-static bool is_thread_in_white_table(const char *tname)
-{
-	uint32_t i;
-
-	if (!tname)
-		return false;
-
-	for (i = 0; i < g_white_table_thread_num; i++) {
-		if (!strcmp(tname, g_cmd_monitor_white_table[i]))
-			return true;
-	}
-	return false;
-}
-
 bool is_thread_reported(unsigned int tid)
 {
 	bool ret = false;
@@ -178,10 +164,18 @@ void cmd_monitor_reset_context(void)
 	mutex_unlock(&g_cmd_monitor_lock);
 }
 
+/*
+* if one session timeout, monitor will print timedifs every step[N] in seconds,
+* if lasted more than 360s, monitor will print timedifs every 360 seconds
+*/
+const int32_t g_timer_step[] = {1, 1, 1, 2, 5, 10, 40, 120, 180, 360};
+const int32_t g_timer_nums = sizeof(g_timer_step) / sizeof(int32_t);
+
 static void show_timeout_cmd_info(struct cmd_monitor *monitor)
 {
-	long long timedif;
+	long long timedif, timedif2;
 	struct time_spec nowtime;
+	int32_t time_in_sec;
 	get_time_spec(&nowtime);
 
 	/*
@@ -191,31 +185,33 @@ static void show_timeout_cmd_info(struct cmd_monitor *monitor)
 	timedif = S_TO_MS * (nowtime.ts.tv_sec - monitor->sendtime.ts.tv_sec) +
 		(nowtime.ts.tv_nsec - monitor->sendtime.ts.tv_nsec) / S_TO_US;
 
-	/* timeout to 25s, we log the teeos log, and report */
+	/* timeout to 10s, we log the teeos log, and report */
 	if ((timedif > CMD_MAX_EXECUTE_TIME * S_TO_MS) && (!monitor->is_reported)) {
 		monitor->is_reported = true;
-		tloge("[cmd_monitor_tick] pid=%d,pname=%s,tid=%d, "
+		tlogw("[cmd_monitor_tick] pid=%d,pname=%s,tid=%d, "
 			"tname=%s, lastcmdid=%u, agent call count:%d, "
-			"timedif=%lld ms and report\n",
+			"running with timedif=%lld ms and report\n",
 			monitor->pid, monitor->pname, monitor->tid,
 			monitor->tname, monitor->lastcmdid,
 			monitor->agent_call_count, timedif);
-		/* threads out of white table need info dump */
-		tloge("monitor: pid-%d", monitor->pid);
-		if (!is_thread_in_white_table(monitor->tname)) {
-			show_cmd_bitmap();
-			g_cmd_need_archivelog = 1;
-			wakeup_tc_siq();
-		}
-		return;
 	}
 
-	if (timedif > 1 * S_TO_MS)
-		tloge("[cmd_monitor_tick] pid=%d,pname=%s,tid=%d, "
+	timedif2 = S_TO_MS * (nowtime.ts.tv_sec - monitor->lasttime.ts.tv_sec) + 
+		(nowtime.ts.tv_nsec - monitor->lasttime.ts.tv_nsec) / S_TO_US;
+	time_in_sec = monitor->timer_index >= g_timer_nums ?
+		g_timer_step[g_timer_nums - 1] : g_timer_step[monitor->timer_index];
+
+	if (timedif2 > time_in_sec * S_TO_MS) {
+		monitor->lasttime = nowtime;
+		monitor->timer_index = monitor->timer_index >= sizeof(g_timer_step) ?
+			sizeof(g_timer_step) : (monitor->timer_index + 1);
+		tlogw("[cmd_monitor_tick] pid=%d,pname=%s,tid=%d, "
 			"lastcmdid=%u,agent call count:%d,timedif=%lld ms\n",
 			monitor->pid, monitor->pname, monitor->tid,
 			monitor->lastcmdid, monitor->agent_call_count,
 			timedif);
+	}
+
 }
 
 static void cmd_monitor_tick(void)
@@ -227,7 +223,7 @@ static void cmd_monitor_tick(void)
 	list_for_each_entry_safe(monitor, tmp, &g_cmd_monitor_list, list) {
 		if (monitor->returned) {
 			g_cmd_monitor_list_size--;
-			tloge("[cmd_monitor_tick] pid=%d,pname=%s,tid=%d, "
+			tlogi("[cmd_monitor_tick] pid=%d,pname=%s,tid=%d, "
 				"tname=%s,lastcmdid=%u,count=%d,agent call count=%d, "
 				"timetotal=%lld us returned, remained command(s)=%d\n",
 				monitor->pid, monitor->pname, monitor->tid, monitor->tname,
@@ -280,6 +276,8 @@ static struct cmd_monitor *init_monitor_locked(void)
 	}
 
 	get_time_spec(&newitem->sendtime);
+	newitem->lasttime = newitem->sendtime;
+	newitem->timer_index = 0;
 	newitem->count = 1;
 	newitem->agent_call_count = 0;
 	newitem->returned = false;
@@ -317,11 +315,14 @@ struct cmd_monitor *cmd_monitor_log(const struct tc_ns_smc_cmd *cmd)
 				found_flag = true;
 				/* restart */
 				get_time_spec(&monitor->sendtime);
+				monitor->lasttime = monitor->sendtime;
+				monitor->timer_index = 0;
 				monitor->count++;
 				monitor->returned = false;
 				monitor->is_reported = false;
 				monitor->lastcmdid = cmd->cmd_id;
 				monitor->agent_call_count = 0;
+				monitor->timetotal = 0;
 				break;
 			}
 		}
@@ -395,5 +396,4 @@ void init_cmd_monitor(void)
 		(uintptr_t)&g_cmd_monitor_work, cmd_monitor_tickfn);
 	INIT_DEFERRABLE_WORK((struct delayed_work *)
 		(uintptr_t)&g_cmd_monitor_work_archive, cmd_monitor_archivefn);
-
 }
