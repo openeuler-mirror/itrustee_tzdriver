@@ -155,16 +155,18 @@ static int tc_ns_get_tee_version(const struct tc_ns_dev_file *dev_file,
 static int get_pack_name_len(struct tc_ns_dev_file *dev_file,
 	const uint8_t *cert_buffer)
 {
-	if (memcpy_s(&dev_file->pkg_name_len, sizeof(dev_file->pkg_name_len),
-		cert_buffer, sizeof(dev_file->pkg_name_len)))
+	uint32_t tmp_len = 0;
+
+	dev_file->pkg_name_len = 0;
+	if (memcpy_s(&tmp_len, sizeof(tmp_len), cert_buffer, sizeof(tmp_len)))
 		return -EFAULT;
 
-	if (!dev_file->pkg_name_len ||
-	    dev_file->pkg_name_len >= MAX_PACKAGE_NAME_LEN) {
-		tloge("invalid pack name len: %u\n", dev_file->pkg_name_len);
+	if (tmp_len == 0 || tmp_len >= MAX_PACKAGE_NAME_LEN) {
+		tloge("invalid pack name len: %u\n", tmp_len);
 		return -EINVAL;
 	}
 
+	dev_file->pkg_name_len = tmp_len;
 	tlogd("package name len is %u\n", dev_file->pkg_name_len);
 
 	return 0;
@@ -173,15 +175,18 @@ static int get_pack_name_len(struct tc_ns_dev_file *dev_file,
 static int get_public_key_len(struct tc_ns_dev_file *dev_file,
 	const uint8_t *cert_buffer)
 {
-	if (memcpy_s(&dev_file->pub_key_len, sizeof(dev_file->pub_key_len),
-		cert_buffer, sizeof(dev_file->pub_key_len)))
+	uint32_t tmp_len = 0;
+
+	dev_file->pub_key_len = 0;
+	if (memcpy_s(&tmp_len, sizeof(tmp_len), cert_buffer, sizeof(tmp_len)))
 		return -EFAULT;
 
-	if (dev_file->pub_key_len > MAX_PUBKEY_LEN) {
-		tloge("invalid public key len: %u\n", dev_file->pub_key_len);
+	if (tmp_len > MAX_PUBKEY_LEN) {
+		tloge("invalid public key len: %u\n", tmp_len);
 		return -EINVAL;
 	}
 
+	dev_file->pub_key_len = tmp_len;
 	tlogd("publick key len is %u\n", dev_file->pub_key_len);
 
 	return 0;
