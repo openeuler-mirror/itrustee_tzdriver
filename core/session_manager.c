@@ -915,6 +915,14 @@ void free_session_token_buf(struct tc_ns_session *session)
 #endif
 }
 
+static void clear_context_param(struct tc_ns_client_context *context)
+{
+	context->params[2].memref.size_addr = 0;
+	context->params[2].memref.buffer = 0;
+	context->params[3].memref.size_addr = 0;
+	context->params[3].memref.buffer = 0;
+}
+
 int tc_ns_open_session(struct tc_ns_dev_file *dev_file,
 	struct tc_ns_client_context *context)
 {
@@ -930,14 +938,15 @@ int tc_ns_open_session(struct tc_ns_dev_file *dev_file,
 
 	ret = check_login_method(dev_file, context, &flags);
 	if (ret)
-		return ret;
+		goto clear_param;
 
 	context->cmd_id = GLOBAL_CMD_ID_OPEN_SESSION;
 
 	service = find_service(dev_file, context);
 	if (!service) {
 		tloge("find service failed\n");
-		return -ENOMEM;
+		ret = -ENOMEM;
+		goto clear_param;
 	}
 
 	session = kzalloc(sizeof(*session), GFP_KERNEL);
@@ -946,13 +955,14 @@ int tc_ns_open_session(struct tc_ns_dev_file *dev_file,
 		mutex_lock(&dev_file->service_lock);
 		del_service_from_dev(dev_file, service);
 		mutex_unlock(&dev_file->service_lock);
-		return -ENOMEM;
+		ret = -ENOMEM;
+		goto clear_param;
 	}
 	mutex_init(&session->ta_session_lock);
 
 	ret = proc_open_session(dev_file, context, service, session, flags);
 	if (!ret)
-		return ret;
+		goto clear_param;
 	free_session_token_buf(session);
 
 	mutex_lock(&dev_file->service_lock);
@@ -960,6 +970,8 @@ int tc_ns_open_session(struct tc_ns_dev_file *dev_file,
 	mutex_unlock(&dev_file->service_lock);
 
 	kfree(session);
+clear_param:
+	clear_context_param(context);
 	return ret;
 }
 
