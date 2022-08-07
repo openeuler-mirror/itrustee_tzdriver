@@ -419,16 +419,16 @@ static void release_vma_shared_mem(struct tc_ns_dev_file *dev_file,
 		if (shared_mem) {
 			if (shared_mem->user_addr ==
 				(void *)(uintptr_t)vma->vm_start) {
-				shared_mem->user_addr = NULL;
+				shared_mem->user_addr = INVALID_MAP_ADDR;
 				find = true;
 			} else if (shared_mem->user_addr_ca ==
 				(void *)(uintptr_t)vma->vm_start) {
-				shared_mem->user_addr_ca = NULL;
+				shared_mem->user_addr_ca = INVALID_MAP_ADDR;
 				find = true;
 			}
 
-			if (!shared_mem->user_addr &&
-				!shared_mem->user_addr_ca)
+			if ((shared_mem->user_addr == INVALID_MAP_ADDR) &&
+				(shared_mem->user_addr_ca == INVALID_MAP_ADDR))
 				list_del(&shared_mem->head);
 
 			/* pair with tc client mmap */
@@ -490,8 +490,8 @@ static struct tc_ns_shared_mem *find_sharedmem(
 			 * 1. this shared mem is already mapped
 			 * 2. remap a different size shared_mem
 			 */
-			if (shm_tmp->user_addr_ca ||
-				vma->vm_end - vma->vm_start != shm_tmp->len) {
+			if ((shm_tmp->user_addr_ca != INVALID_MAP_ADDR) ||
+				(vma->vm_end - vma->vm_start != shm_tmp->len)) {
 				tloge("already remap once!\n");
 				return NULL;
 			}

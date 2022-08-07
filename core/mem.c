@@ -71,8 +71,8 @@ struct tc_ns_shared_mem *tc_mem_allocate(size_t len)
 	}
 	shared_mem->kernel_addr = addr;
 	shared_mem->len = len;
-	shared_mem->user_addr = NULL;
-	shared_mem->user_addr_ca = NULL;
+	shared_mem->user_addr = INVALID_MAP_ADDR;
+	shared_mem->user_addr_ca = INVALID_MAP_ADDR;
 	atomic_set(&shared_mem->usage, 0);
 	return shared_mem;
 }
