@@ -794,7 +794,6 @@ static int tc_client_close(struct inode *inode, struct file *file)
 	int ret = 0;
 	struct tc_ns_dev_file *dev = file->private_data;
 
-	clean_agent_pid_info(dev);
 	if (g_teecd_task == current->group_leader && !tc_ns_get_uid()) {
 		/* for teecd close fd */
 		if ((g_teecd_task->flags & PF_EXITING) ||

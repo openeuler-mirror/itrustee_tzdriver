@@ -702,7 +702,6 @@ static void init_restart_agent_node(struct tc_ns_dev_file *dev_file,
 	tloge("agent: 0x%x restarting\n", event_data->agent_id);
 	event_data->ret_flag = 0;
 	event_data->owner = dev_file;
-	event_data->pid = current->tgid;
 	atomic_set(&event_data->agent_ready, AGENT_REGISTERED);
 	init_waitqueue_head(&(event_data->wait_event_wq));
 	init_waitqueue_head(&(event_data->send_response_wq));
@@ -732,7 +731,6 @@ static int create_new_agent_node(struct tc_ns_dev_file *dev_file,
 	(*event_data)->agent_buff_kernel = *agent_buff;
 	(*event_data)->agent_buff_size = agent_buff_size;
 	(*event_data)->owner = dev_file;
-	(*event_data)->pid = current->tgid;
 	atomic_set(&(*event_data)->agent_ready, AGENT_REGISTERED);
 	init_waitqueue_head(&(*event_data)->wait_event_wq);
 	init_waitqueue_head(&(*event_data)->send_response_wq);
@@ -808,21 +806,8 @@ static bool is_valid_agent(unsigned int agent_id,
 	return true;
 }
 
-void clean_agent_pid_info(struct tc_ns_dev_file *dev_file)
-{
-	struct smc_event_data *agent_node = NULL;
-	unsigned long flags;
-
-	spin_lock_irqsave(&g_agent_control.lock, flags);
-	list_for_each_entry(agent_node, &g_agent_control.agent_list, head) {
-		if (agent_node->owner == dev_file)
-			agent_node->pid = 0;
-	}
-	spin_unlock_irqrestore(&g_agent_control.lock, flags);
-}
-
-static int is_agent_already_exist(unsigned int agent_id,
-	struct smc_event_data **event_data, bool *find_flag)
+static int reuse_agent_node(unsigned int agent_id,
+	struct smc_event_data **event_data, struct tc_ns_dev_file *dev_file, bool *find_flag)
 {
 	unsigned long flags;
 	bool flag = false;
@@ -831,13 +816,18 @@ static int is_agent_already_exist(unsigned int agent_id,
 	spin_lock_irqsave(&g_agent_control.lock, flags);
 	list_for_each_entry(agent_node, &g_agent_control.agent_list, head) {
 		if (agent_node->agent_id == agent_id) {
-			if (agent_node->pid == current->tgid) {
+			if (atomic_read(&agent_node->agent_ready) != AGENT_CRASHED) {
 				tloge("no allow agent proc to reg twice\n");
 				spin_unlock_irqrestore(&g_agent_control.lock, flags);
 				return -EINVAL;
 			}
 			flag = true;
 			get_agent_event(agent_node);
+			/*
+			 * We find agent event_data already in agent list, it indicate agent
+			 * didn't unregister normally, so the event_data will be reused.
+			 */
+			init_restart_agent_node(dev_file, agent_node);
 			break;
 		}
 	}
@@ -934,15 +924,9 @@ int tc_ns_register_agent(struct tc_ns_dev_file *dev_file,
 
 	size_align = ALIGN(buffer_size, SZ_4K);
 
-	if (is_agent_already_exist(agent_id, &event_data, &find_flag))
+	if (reuse_agent_node(agent_id, &event_data, dev_file, &find_flag))
 		return ret;
-	/*
-	 * We find the agent event_data aready in agent_list, it indicate agent
-	 * didn't unregister normally, so the event_data will be reused.
-	 */
-	if (find_flag) {
-		init_restart_agent_node(dev_file, event_data);
-	} else {
+	if (!find_flag) {
 		ret = create_new_agent_node(dev_file, &event_data,
 			agent_id, &agent_buff, size_align);
 		if (ret)

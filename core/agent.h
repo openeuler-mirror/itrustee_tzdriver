@@ -52,7 +52,6 @@ struct smc_event_data {
 	struct list_head head;
 	struct tc_ns_smc_cmd cmd;
 	struct tc_ns_dev_file *owner;
-	pid_t pid;
 	void *agent_buff_kernel;
 	void *agent_buff_user; /* used for unmap */
 	unsigned int agent_buff_size;
@@ -117,6 +116,5 @@ int tee_agent_kernel_register(struct tee_agent_kernel_ops *new_agent);
 bool is_system_agent(const struct tc_ns_dev_file *dev_file);
 void tee_agent_clear_dev_owner(const struct tc_ns_dev_file *dev_file);
 char *get_proc_dpath(char *path, int path_len);
-void clean_agent_pid_info(struct tc_ns_dev_file *dev_file);
 
 #endif
