@@ -63,6 +63,7 @@ struct tc_uuid {
 	uint8_t clockseq_and_node[8]; /* clock len is 8 */
 };
 
+#define INVALID_MAP_ADDR ((void*)-1)
 struct tc_ns_shared_mem {
 	void *kernel_addr;
 	void *user_addr;
