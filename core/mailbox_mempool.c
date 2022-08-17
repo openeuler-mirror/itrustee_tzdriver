@@ -340,6 +340,7 @@ static struct dentry *g_mb_dbg_dentry;
 static unsigned int mb_dbg_add_entry(void *ptr)
 {
 	struct mb_dbg_entry *new_entry = NULL;
+	unsigned int index = 0;
 
 	new_entry = kmalloc(sizeof(*new_entry), GFP_KERNEL);
 	if (ZERO_OR_NULL_PTR((unsigned long)(uintptr_t)new_entry)) {
@@ -355,9 +356,10 @@ static unsigned int mb_dbg_add_entry(void *ptr)
 	if ((g_mb_dbg_entry_count++) == 0)
 		g_mb_dbg_entry_count++;
 	list_add_tail(&new_entry->node, &mb_dbg_list);
+	index = new_entry->idx;
 	mutex_unlock(&mb_dbg_lock);
 
-	return new_entry->idx;
+	return index;
 }
 
 static void mb_dbg_remove_entry(unsigned int idx)
@@ -556,6 +558,15 @@ free_smc_cmd:
 	return ret;
 }
 
+static void mailbox_debug_init(void)
+{
+	g_mb_dbg_dentry = debugfs_create_dir("tz_mailbox", NULL);
+#ifdef DEF_ENG
+	debugfs_create_file("opt", OPT_MODE, g_mb_dbg_dentry, NULL, &g_mb_dbg_opt_fops);
+#endif
+	debugfs_create_file("state", STATE_MODE, g_mb_dbg_dentry, NULL, &g_mb_dbg_state_fops);
+}
+
 int mailbox_mempool_init(void)
 {
 	int i;
@@ -609,11 +620,7 @@ int mailbox_mempool_init(void)
 	list_add_tail(&mb_page->node, &area->page_list);
 	g_m_zone->all_pages = all_pages;
 	mutex_init(&g_mb_lock);
-	g_mb_dbg_dentry = debugfs_create_dir("tz_mailbox", NULL);
-	debugfs_create_file("opt", OPT_MODE, g_mb_dbg_dentry, NULL,
-		&g_mb_dbg_opt_fops);
-	debugfs_create_file("state", STATE_MODE, g_mb_dbg_dentry, NULL,
-		&g_mb_dbg_state_fops);
+	mailbox_debug_init();
 	return 0;
 }
 

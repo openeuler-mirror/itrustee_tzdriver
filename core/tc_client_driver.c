@@ -155,16 +155,18 @@ static int tc_ns_get_tee_version(const struct tc_ns_dev_file *dev_file,
 static int get_pack_name_len(struct tc_ns_dev_file *dev_file,
 	const uint8_t *cert_buffer)
 {
-	if (memcpy_s(&dev_file->pkg_name_len, sizeof(dev_file->pkg_name_len),
-		cert_buffer, sizeof(dev_file->pkg_name_len)))
+	uint32_t tmp_len = 0;
+
+	dev_file->pkg_name_len = 0;
+	if (memcpy_s(&tmp_len, sizeof(tmp_len), cert_buffer, sizeof(tmp_len)))
 		return -EFAULT;
 
-	if (!dev_file->pkg_name_len ||
-	    dev_file->pkg_name_len >= MAX_PACKAGE_NAME_LEN) {
-		tloge("invalid pack name len: %u\n", dev_file->pkg_name_len);
+	if (tmp_len == 0 || tmp_len >= MAX_PACKAGE_NAME_LEN) {
+		tloge("invalid pack name len: %u\n", tmp_len);
 		return -EINVAL;
 	}
 
+	dev_file->pkg_name_len = tmp_len;
 	tlogd("package name len is %u\n", dev_file->pkg_name_len);
 
 	return 0;
@@ -173,15 +175,18 @@ static int get_pack_name_len(struct tc_ns_dev_file *dev_file,
 static int get_public_key_len(struct tc_ns_dev_file *dev_file,
 	const uint8_t *cert_buffer)
 {
-	if (memcpy_s(&dev_file->pub_key_len, sizeof(dev_file->pub_key_len),
-		cert_buffer, sizeof(dev_file->pub_key_len)))
+	uint32_t tmp_len = 0;
+
+	dev_file->pub_key_len = 0;
+	if (memcpy_s(&tmp_len, sizeof(tmp_len), cert_buffer, sizeof(tmp_len)))
 		return -EFAULT;
 
-	if (dev_file->pub_key_len > MAX_PUBKEY_LEN) {
-		tloge("invalid public key len: %u\n", dev_file->pub_key_len);
+	if (tmp_len > MAX_PUBKEY_LEN) {
+		tloge("invalid public key len: %u\n", tmp_len);
 		return -EINVAL;
 	}
 
+	dev_file->pub_key_len = tmp_len;
 	tlogd("publick key len is %u\n", dev_file->pub_key_len);
 
 	return 0;
@@ -414,16 +419,16 @@ static void release_vma_shared_mem(struct tc_ns_dev_file *dev_file,
 		if (shared_mem) {
 			if (shared_mem->user_addr ==
 				(void *)(uintptr_t)vma->vm_start) {
-				shared_mem->user_addr = NULL;
+				shared_mem->user_addr = INVALID_MAP_ADDR;
 				find = true;
 			} else if (shared_mem->user_addr_ca ==
 				(void *)(uintptr_t)vma->vm_start) {
-				shared_mem->user_addr_ca = NULL;
+				shared_mem->user_addr_ca = INVALID_MAP_ADDR;
 				find = true;
 			}
 
-			if (!shared_mem->user_addr &&
-				!shared_mem->user_addr_ca)
+			if ((shared_mem->user_addr == INVALID_MAP_ADDR) &&
+				(shared_mem->user_addr_ca == INVALID_MAP_ADDR))
 				list_del(&shared_mem->head);
 
 			/* pair with tc client mmap */
@@ -485,8 +490,8 @@ static struct tc_ns_shared_mem *find_sharedmem(
 			 * 1. this shared mem is already mapped
 			 * 2. remap a different size shared_mem
 			 */
-			if (shm_tmp->user_addr_ca ||
-				vma->vm_end - vma->vm_start != shm_tmp->len) {
+			if ((shm_tmp->user_addr_ca != INVALID_MAP_ADDR) ||
+				(vma->vm_end - vma->vm_start != shm_tmp->len)) {
 				tloge("already remap once!\n");
 				return NULL;
 			}
@@ -789,7 +794,6 @@ static int tc_client_close(struct inode *inode, struct file *file)
 	int ret = 0;
 	struct tc_ns_dev_file *dev = file->private_data;
 
-	clean_agent_pid_info(dev);
 	if (g_teecd_task == current->group_leader && !tc_ns_get_uid()) {
 		/* for teecd close fd */
 		if ((g_teecd_task->flags & PF_EXITING) ||
