@@ -518,6 +518,7 @@ static int crypto_aescbc_key256(uint8_t *output, const uint8_t *input,
 	int ret;
 	uint8_t temp_iv[IV_BYTESIZE] = {0};
 
+        DECLARE_CRYPTO_WAIT(wait);
 	skcipher = crypto_alloc_skcipher("cbc(aes)", 0, 0);
 	if (IS_ERR_OR_NULL(skcipher)) {
 		tloge("crypto_alloc_skcipher() failed\n");
@@ -546,11 +547,14 @@ static int crypto_aescbc_key256(uint8_t *output, const uint8_t *input,
 	sg_init_table(&src, 1); /* init table to 1 */
 	sg_set_buf(&dst, output, size);
 	sg_set_buf(&src, input, size);
+	skcipher_request_set_callback(req, 0, crypto_req_done, &wait);
 	skcipher_request_set_crypt(req, &src, &dst, size, temp_iv);
 	if (encrypto_type)
-		ret = crypto_skcipher_encrypt(req);
+		ret = crypto_wait_req(crypto_skcipher_encrypt(req), &wait);
 	else
-		ret = crypto_skcipher_decrypt(req);
+		ret = crypto_wait_req(crypto_skcipher_decrypt(req), &wait);
+        if (ret)
+                tloge("%s data failed, ret=%d\n", encrypto_type ? "encrypt" : "decrypt", ret);
 	skcipher_request_free(req);
 	crypto_free_skcipher(skcipher);
 	return ret;
