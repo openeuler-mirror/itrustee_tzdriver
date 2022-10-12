@@ -504,6 +504,50 @@ static int crypto_aescbc_cms_padding(uint8_t *plaintext, uint32_t plaintext_len,
 	return 0;
 }
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 15, 0)
+
+struct crypto_wait {
+	struct completion completion;
+	int err;
+};
+
+/* 
+ * Macro for declaring a crypto op async wait object on stack
+ */
+#define DECLARE_CRYPTO_WAIT(_wait) \
+	struct crypto_wait _wait = { \
+		COMPLETION_INITIALIZER_ONSTACK((_wait).completion), 0 }
+
+/*
+ * Async ops completion helper functions
+ */
+void crypto_req_done(struct crypto_async_request *req, int err)
+{
+	struct crypto_wait *wait = req->data;
+
+	if (err == -EINPROGRESS)
+		return;
+
+	wait->err = err;
+	complete(&wait->completion);
+}
+
+static inline int crypto_wait_req(int err, struct crypto_wait *wait)
+{
+	switch (err) {
+	case -EINPROGRESS:
+	case -EBUSY:
+		wait_for_completion(&wait->completion);
+		reinit_completion(&wait->completion);
+		err = wait->err;
+		break;
+	}
+
+	return err;
+}
+
+#endif
+
 /* size of [iv] is 16 and [key] must be 32 bytes.
  * [size] is the size of [output] and [input].
  * [size] must be multiple of 32.
