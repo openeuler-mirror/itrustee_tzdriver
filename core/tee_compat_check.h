@@ -25,11 +25,11 @@
  * this version number MAJOR.MINOR is used
  * to identify the compatibility of tzdriver and teeos
  */
-#define TEEOS_COMPAT_LEVEL_MAJOR 1
+#define TEEOS_COMPAT_LEVEL_MAJOR 2
 #define TEEOS_COMPAT_LEVEL_MINOR 0
 
 #define VER_CHECK_MAGIC_NUM 0x5A5A5A5A
 #define COMPAT_LEVEL_BUF_LEN 12
 
-int32_t check_teeos_compat_level(uint32_t *buffer, uint32_t size);
+int32_t check_teeos_compat_level(const uint32_t *buffer, uint32_t size);
 #endif

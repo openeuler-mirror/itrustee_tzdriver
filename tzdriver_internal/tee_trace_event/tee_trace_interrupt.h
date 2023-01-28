@@ -1,7 +1,4 @@
 /*
- * secs_power_ctrl.h
- *
- * function declaration for secs power ctrl
  *
  * Copyright (c) 2012-2022 Huawei Technologies Co., Ltd.
  *
@@ -16,25 +13,25 @@
  * GNU General Public License for more details.
  */
 
-#ifndef SECS_POWER_CTRL_H
-#define SECS_POWER_CTRL_H
+#ifndef TEE_TRACE_INTERRUPT_H
+#define TEE_TRACE_INTERRUPT_H
 
-#include <tc_ns_log.h>
+#define LOGGER_INTERVAL     		2000
+#define LOGGER_RUNNING      		1
+#define LOGGER_NOT_RUNNING  		0
 
-static int power_on_cc(void)
-{
-	return 0;
-}
+#ifndef CONFIG_INT_TRACE_LOG_PATH
+#define CONFIG_INT_TRACE_LOG_PATH       "/data/log/tee/int_trace"
+#endif
 
-static int power_down_cc(void)
-{
-	return 0;
-}
+#ifndef CONFIG_EVENT_TRACE_LOG_PATH
+#define CONFIG_EVENT_TRACE_LOG_PATH 	"/data/log/tee/event_trace"
+#endif
 
-static void secs_suspend_status(uint64_t target)
-{
-	(void)target;
-	return;
-}
+#define TRACE_LOG_OPEN_FILE_MODE	0640U
+#define LOG_STR_BUFFER_LEN 		256
 
+void interrupt_trace_start(void);
+void interrupt_trace_stop(void);
+void free_interrupt_trace(void);
 #endif

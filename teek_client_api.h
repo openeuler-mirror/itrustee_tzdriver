@@ -18,7 +18,6 @@
 
 #ifndef TEEK_CLIENT_API_H
 #define TEEK_CLIENT_API_H
-#include "teek_ns_client.h"
 #include "teek_client_type.h"
 
 #define TEEC_PARAM_TYPES(param0_type, param1_type, param2_type, param3_type) \
@@ -29,8 +28,6 @@
 		(((param_types) >> ((index) << 2)) & 0x0F)
 
 #define TEEC_VALUE_UNDEF 0xFFFFFFFF
-
-#ifdef CONFIG_KERNEL_CLIENT
 
 /*
  * for history reason, we supply two set interface
@@ -94,89 +91,5 @@ TEEC_Result TEEK_InvokeCommand(TEEC_Session *session,
 	uint32_t commandID,
 	TEEC_Operation *operation,
 	uint32_t *returnOrigin);
-
-#else
-
-static inline int teek_is_agent_alive(unsigned int agent_id)
-{
-	return TEEC_SUCCESS;
-}
-
-static inline int TEEK_IsAgentAlive(unsigned int agent_id)
-{
-	return TEEC_SUCCESS;
-}
-
-static inline uint32_t teek_initialize_context(const char *name,
-	struct teec_context *context)
-{
-	return TEEC_SUCCESS;
-}
-
-static inline TEEC_Result TEEK_InitializeContext(const char *name,
-	TEEC_Context *context)
-{
-	return TEEC_SUCCESS;
-}
-
-static inline void teek_finalize_context(struct teec_context *context)
-{
-	(void)context;
-}
-
-static inline void TEEK_FinalizeContext(TEEC_Context *context)
-{
-	(void)context;
-}
-
-static inline uint32_t teek_open_session(struct teec_context *context,
-	struct teec_session *session,
-	const struct teec_uuid *destination,
-	uint32_t connection_method,
-	const void *connection_data,
-	const struct teec_operation *operation,
-	uint32_t *return_origin)
-{
-	return TEEC_SUCCESS;
-}
-
-static inline TEEC_Result TEEK_OpenSession(TEEC_Context *context,
-	TEEC_Session *session, const TEEC_UUID *destination,
-	uint32_t connectionMethod, const void *connectionData,
-	TEEC_Operation *operation, uint32_t *returnOrigin)
-{
-	return TEEC_SUCCESS;
-}
-
-static inline void teek_close_session(struct teec_session *session)
-{
-	(void)session;
-}
-
-static inline void TEEK_CloseSession(TEEC_Session *session)
-{
-	(void)session;
-}
-
-static inline uint32_t teek_invoke_command(struct teec_session *session,
-	uint32_t cmd_id, struct teec_operation *operation,
-	uint32_t *return_origin)
-{
-	return TEEC_SUCCESS;
-}
-
-static inline TEEC_Result TEEK_InvokeCommand(TEEC_Session *session,
-	uint32_t commandID, TEEC_Operation *operation, uint32_t *returnOrigin)
-{
-	return TEEC_SUCCESS;
-}
-
-static inline uint32_t teek_send_secfile(struct teec_session *session,
-	const char *file_buffer, unsigned int file_size)
-{
-	return TEEC_SUCCESS;
-}
-
-#endif
 
 #endif

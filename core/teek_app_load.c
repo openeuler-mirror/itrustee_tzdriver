@@ -41,7 +41,6 @@ static int32_t teek_open_app_file(struct file *fp, char **file_buf, uint32_t tot
 	}
 
 	read_size = (uint32_t)kernel_read(fp, file_buffer, total_img_len, &pos);
-
 	if (read_size != total_img_len) {
 		tloge("read ta file failed, read size/total size=%u/%u\n", read_size, total_img_len);
 		vfree(file_buffer);
@@ -61,6 +60,12 @@ static int32_t teek_read_app(const char *load_file, char **file_buf, uint32_t *f
 	fp = filp_open(load_file, O_RDONLY, 0);
 	if (!fp || IS_ERR(fp)) {
 		tloge("open file error %ld\n", PTR_ERR(fp));
+		return TEEC_ERROR_BAD_PARAMETERS;
+	}
+
+	if (!fp->f_inode) {
+		tloge("node is NULL\n");
+		filp_close(fp, 0);
 		return TEEC_ERROR_BAD_PARAMETERS;
 	}
 
@@ -90,8 +95,8 @@ int32_t teek_get_app(const char *ta_path, char **file_buf, uint32_t *file_len)
 {
 	int32_t ret;
 
-	/* ta path is NULL or user CA means no need to load TA */
-	if (!ta_path || current->mm != NULL)
+	/* ta path is NULL means no need to load TA */
+	if (!ta_path)
 		return TEEC_SUCCESS;
 
 	if (!file_buf || !file_len) {

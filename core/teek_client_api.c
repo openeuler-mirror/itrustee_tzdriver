@@ -29,10 +29,10 @@
 #include <linux/freezer.h>
 #include <linux/kernel.h>
 #include <securec.h>
-#include "teek_client_id.h"
 #include "tc_ns_log.h"
 #include "tc_ns_client.h"
 #include "gp_ops.h"
+#include "internal_functions.h"
 #include "session_manager.h"
 #include "tc_client_driver.h"
 #include "teek_app_load.h"
@@ -42,33 +42,31 @@ static void encode_for_part_mem(struct tc_ns_client_context *context,
 {
 	uint32_t diff = (uint32_t)TEEC_MEMREF_PARTIAL_INPUT -
 		(uint32_t)TEEC_MEMREF_TEMP_INPUT;
+	uint64_t size_addr, buffer_addr;
 
 	if (idex >= TEE_PARAM_NUM)
 		return;
 
 	if (param_type[idex] == TEEC_MEMREF_WHOLE) {
 		context->params[idex].memref.offset = 0;
-		context->params[idex].memref.size_addr =
-			(__u64)(uintptr_t)
-			(&(oper->params[idex].memref.parent->size));
+		size_addr = (__u64)(uintptr_t)(&(oper->params[idex].memref.parent->size));
 	} else {
-		context->params[idex].memref.offset =
-			oper->params[idex].memref.offset;
-		context->params[idex].memref.size_addr =
-			(__u64)(uintptr_t)
-			(&(oper->params[idex].memref.size));
+		context->params[idex].memref.offset = oper->params[idex].memref.offset;
+		size_addr = (__u64)(uintptr_t)(&(oper->params[idex].memref.size));
 	}
+	context->params[idex].memref.size_addr = (__u32)size_addr;
+	context->params[idex].memref.size_h_addr = (__u32)(size_addr >> ADDR_TRANS_NUM);
+
 	if (oper->params[idex].memref.parent->is_allocated) {
-		context->params[idex].memref.buffer =
-			(__u64)(uintptr_t)
-			oper->params[idex].memref.parent->buffer;
+		buffer_addr = (__u64)(uintptr_t)oper->params[idex].memref.parent->buffer;
 	} else {
-		context->params[idex].memref.buffer =
-			(__u64)(uintptr_t)
+		buffer_addr = (__u64)(uintptr_t)
 			oper->params[idex].memref.parent->buffer +
 			oper->params[idex].memref.offset;
 		context->params[idex].memref.offset = 0;
 	}
+	context->params[idex].memref.buffer = (__u32)buffer_addr;
+	context->params[idex].memref.buffer_h_addr = (__u32)(buffer_addr >> ADDR_TRANS_NUM);
 
 	/* translate the paramType to know the driver */
 	if (param_type[idex] == TEEC_MEMREF_WHOLE) {
@@ -98,6 +96,7 @@ static uint32_t proc_teek_encode(struct tc_ns_client_context *cli_context,
 {
 	uint32_t param_type[TEE_PARAM_NUM];
 	uint32_t idex;
+	uint64_t buffer_addr, size_addr, a_addr, b_addr;
 
 	param_type[0] =
 		teec_param_type_get(operation->paramtypes, 0);
@@ -109,29 +108,29 @@ static uint32_t proc_teek_encode(struct tc_ns_client_context *cli_context,
 		teec_param_type_get(operation->paramtypes, 3);
 	for (idex = 0; idex < TEE_PARAM_NUM; idex++) {
 		if (is_tmp_mem(param_type[idex])) {
-			cli_context->params[idex].memref.buffer =
-				(__u64)(uintptr_t)
-				(operation->params[idex].tmpref.buffer);
-			cli_context->params[idex].memref.size_addr =
-				(__u64)(uintptr_t)
-				(&operation->params[idex].tmpref.size);
+			buffer_addr = (__u64)(uintptr_t)(operation->params[idex].tmpref.buffer);
+			size_addr = (__u64)(uintptr_t)(&operation->params[idex].tmpref.size);
+			cli_context->params[idex].memref.buffer = (__u32)buffer_addr;
+			cli_context->params[idex].memref.buffer_h_addr = (__u32)(buffer_addr >> ADDR_TRANS_NUM);
+			cli_context->params[idex].memref.size_addr = (__u32)size_addr;
+			cli_context->params[idex].memref.size_h_addr = (__u32)(size_addr >> ADDR_TRANS_NUM);
 		} else if (is_ref_mem(param_type[idex])) {
 			encode_for_part_mem(cli_context, operation,
 				idex, param_type);
 		} else if (is_val_param(param_type[idex])) {
-			cli_context->params[idex].value.a_addr =
-				(__u64)(uintptr_t)
-				(&(operation->params[idex].value.a));
-			cli_context->params[idex].value.b_addr =
-				(__u64)(uintptr_t)
-				(&(operation->params[idex].value.b));
+			a_addr = (__u64)(uintptr_t)(&(operation->params[idex].value.a));
+			b_addr = (__u64)(uintptr_t)(&(operation->params[idex].value.b));
+			cli_context->params[idex].value.a_addr = (__u32)a_addr;
+			cli_context->params[idex].value.a_h_addr = (__u32)(a_addr >> ADDR_TRANS_NUM);
+			cli_context->params[idex].value.b_addr = (__u32)b_addr;
+			cli_context->params[idex].value.b_h_addr = (__u32)(b_addr >> ADDR_TRANS_NUM);
 		} else if (is_ion_param(param_type[idex])) {
-			cli_context->params[idex].value.a_addr =
-				(__u64)(uintptr_t)
-				(&(operation->params[idex].ionref.ion_share_fd));
-			cli_context->params[idex].value.b_addr =
-				(__u64)(uintptr_t)
-				(&(operation->params[idex].ionref.ion_size));
+			a_addr = (__u64)(uintptr_t)(&(operation->params[idex].ionref.ion_share_fd));
+			b_addr = (__u64)(uintptr_t)(&(operation->params[idex].ionref.ion_size));
+			cli_context->params[idex].value.a_addr = (__u32)a_addr;
+			cli_context->params[idex].value.a_h_addr = (__u32)(a_addr >> ADDR_TRANS_NUM);
+			cli_context->params[idex].value.b_addr = (__u32)b_addr;
+			cli_context->params[idex].value.b_h_addr = (__u32)(b_addr >> ADDR_TRANS_NUM);
 		} else if (param_type[idex] == TEEC_NONE) {
 			/* do nothing */
 		} else {
@@ -157,7 +156,7 @@ static uint32_t teek_init_context(struct tc_ns_client_context *cli_context,
 		(uint32_t)TEEC_MEMREF_TEMP_INPUT;
 
 	if (memset_s(cli_context, sizeof(*cli_context),
-		0x00, sizeof(*cli_context))) {
+		0x00, sizeof(*cli_context)) != 0) {
 		tloge("memset error, init cli context failed\n");
 		return TEEC_ERROR_BAD_PARAMETERS;
 	}
@@ -165,7 +164,7 @@ static uint32_t teek_init_context(struct tc_ns_client_context *cli_context,
 	cli_context->returns.origin = TEEC_ORIGIN_COMMS;
 
 	if (memcpy_s(cli_context->uuid, sizeof(cli_context->uuid),
-		(uint8_t *)&service_id, sizeof(service_id))) {
+		(uint8_t *)&service_id, sizeof(service_id)) != 0) {
 		tloge("memcpy error, init cli context failed\n");
 		return TEEC_ERROR_BAD_PARAMETERS;
 	}
@@ -181,7 +180,7 @@ static uint32_t teek_init_context(struct tc_ns_client_context *cli_context,
 static uint32_t teek_check_tmp_mem(
 	const struct teec_tempmemory_reference *tmpref)
 {
-	if (!tmpref->buffer || !tmpref->size) {
+	if (!tmpref->buffer || (tmpref->size == 0)) {
 		tloge("tmpref buffer is null, or size is zero\n");
 		return TEEC_ERROR_BAD_PARAMETERS;
 	}
@@ -219,15 +218,15 @@ static uint32_t teek_check_ref_mem(
 		return TEEC_ERROR_BAD_PARAMETERS;
 	}
 	if (param_type == TEEC_MEMREF_PARTIAL_INPUT) {
-		if (!(memref->parent->flags & TEEC_MEM_INPUT))
+		if ((memref->parent->flags & TEEC_MEM_INPUT) == 0)
 			return TEEC_ERROR_BAD_PARAMETERS;
 	} else if (param_type == TEEC_MEMREF_PARTIAL_OUTPUT) {
-		if (!(memref->parent->flags & TEEC_MEM_OUTPUT))
+		if ((memref->parent->flags & TEEC_MEM_OUTPUT) == 0)
 			return TEEC_ERROR_BAD_PARAMETERS;
 	} else if (param_type == TEEC_MEMREF_PARTIAL_INOUT) {
-		if (!(memref->parent->flags & TEEC_MEM_INPUT))
+		if ((memref->parent->flags & TEEC_MEM_INPUT) == 0)
 			return TEEC_ERROR_BAD_PARAMETERS;
-		if (!(memref->parent->flags & TEEC_MEM_OUTPUT))
+		if ((memref->parent->flags & TEEC_MEM_OUTPUT) == 0)
 			return TEEC_ERROR_BAD_PARAMETERS;
 	} else if (param_type == TEEC_MEMREF_WHOLE) {
 		/* if type is TEEC_MEMREF_WHOLE, ignore it */
@@ -262,7 +261,7 @@ uint32_t teek_check_operation(const struct teec_operation *operation)
 	if (!operation)
 		return TEEC_SUCCESS;
 
-	if (!operation->started) {
+	if (operation->started == 0) {
 		tloge("sorry, cancellation not support\n");
 		return TEEC_ERROR_NOT_IMPLEMENTED;
 	}
@@ -392,10 +391,17 @@ static bool is_oper_param_valid(const struct teec_operation *operation)
 }
 
 static uint32_t check_open_sess_params(struct teec_context *context,
-	const struct teec_operation *operation)
+	const struct teec_operation *operation, const struct teec_uuid *destination,
+	uint32_t connection_method)
 {
 	struct tc_ns_dev_file *dev_file = NULL;
 	uint32_t teec_ret;
+
+	if (!context || !operation || !destination ||
+		connection_method != TEEC_LOGIN_IDENTIFY) {
+		tloge("invalid input params\n");
+		return TEEC_ERROR_BAD_PARAMETERS;
+	}
 
 	if (!is_oper_param_valid(operation))
 		return TEEC_ERROR_BAD_PARAMETERS;
@@ -411,13 +417,13 @@ static uint32_t check_open_sess_params(struct teec_context *context,
 		return TEEC_ERROR_BAD_PARAMETERS;
 	} else {
 		if (memset_s(dev_file->pkg_name, sizeof(dev_file->pkg_name),
-			0, MAX_PACKAGE_NAME_LEN)) {
+			0, MAX_PACKAGE_NAME_LEN) != 0) {
 			tloge("memset error\n");
 			return TEEC_ERROR_BAD_PARAMETERS;
 		}
 		if (memcpy_s(dev_file->pkg_name, sizeof(dev_file->pkg_name),
 			operation->params[3].tmpref.buffer,
-			operation->params[3].tmpref.size)) {
+			operation->params[3].tmpref.size) != 0) {
 			tloge("memcpy error\n");
 			return TEEC_ERROR_BAD_PARAMETERS;
 		}
@@ -442,7 +448,7 @@ static uint32_t open_session_and_switch_ret(struct teec_session *session,
 	uint32_t teec_ret;
 
 	ret = tc_ns_open_session(context->dev, cli_context);
-	if (!ret) {
+	if (ret == 0) {
 		tlogd("open session success\n");
 		session->session_id = cli_context->session_id;
 		session->service_id = *destination;
@@ -483,6 +489,7 @@ static uint32_t proc_teek_open_session(struct teec_context *context,
 	struct tc_ns_client_context cli_context;
 	struct tc_ns_client_login cli_login = {0};
 	bool load_app_flag = false;
+	char *file_buffer = NULL;
 
 	/* connectionData current not used */
 	(void)(connection_data);
@@ -490,15 +497,21 @@ static uint32_t proc_teek_open_session(struct teec_context *context,
 		*return_origin = origin;
 
 	/* First, check parameters is valid or not */
-	if (!context || !operation || !destination ||
-		!session || connection_method != TEEC_LOGIN_IDENTIFY) {
-		tloge("invalid input params\n");
+	if (!session) {
+		tloge("invalid session\n");
 		teec_ret = TEEC_ERROR_BAD_PARAMETERS;
 		goto set_ori;
 	}
 
+	/*
+	 * ca may call closesession even if opensession failed,
+	 * we set session->context here to avoid receive a illegal ptr,
+	 * same as libteec_vendor
+	 */
+	session->context = context;
+
 	cli_login.method = TEEC_LOGIN_IDENTIFY;
-	teec_ret = check_open_sess_params(context, operation);
+	teec_ret = check_open_sess_params(context, operation, destination, connection_method);
 	if (teec_ret != TEEC_SUCCESS)
 		goto set_ori;
 
@@ -515,20 +528,24 @@ static uint32_t proc_teek_open_session(struct teec_context *context,
 			goto set_ori;
 	}
 
-	teec_ret = teek_get_app(context->ta_path, &cli_context.file_buffer,
+	teec_ret = (uint32_t)teek_get_app(context->ta_path, &file_buffer,
 		&cli_context.file_size);
 	if (teec_ret != TEEC_SUCCESS)
 		goto set_ori;
+	cli_context.memref.file_addr = (uint32_t)(uintptr_t)file_buffer;
+	cli_context.memref.file_h_addr = (uint32_t)(((uint64_t)(uintptr_t)file_buffer) >> ADDR_TRANS_NUM);
 	load_app_flag = true;
 
+	livepatch_down_read_sem();
 	teec_ret = open_session_and_switch_ret(session, context,
 		destination, &cli_context, &origin);
+	livepatch_up_read_sem();
 
 set_ori:
 	if (teec_ret != TEEC_SUCCESS && return_origin != NULL)
 		*return_origin = origin;
 
-	teek_free_app(load_app_flag, &cli_context.file_buffer);
+	teek_free_app(load_app_flag, &file_buffer);
 	return teec_ret;
 }
 
@@ -556,7 +573,7 @@ EXPORT_SYMBOL(teek_open_session);
  * This function closes an opened Session.
  */
 
-static bool is_close_sess_param_valid(struct teec_session *session)
+static bool is_close_sess_param_valid(const struct teec_session *session)
 {
 	tlogd("teek_close_session started\n");
 
@@ -583,14 +600,14 @@ void teek_close_session(struct teec_session *session)
 		tloge("init cli context failed just return\n");
 		return;
 	}
-
+	livepatch_down_read_sem();
 	ret = tc_ns_close_session(session->context->dev, &cli_context);
-	if (!ret) {
+	livepatch_up_read_sem();
+	if (ret == 0) {
 		session->session_id = 0;
 		if (memset_s((uint8_t *)(&session->service_id),
-			sizeof(session->service_id), 0x00, UUID_LEN))
+			sizeof(session->service_id), 0x00, UUID_LEN) != 0)
 			tloge("memset error\n");
-
 		session->ops_cnt = 0;
 		session->context = NULL;
 	} else {
@@ -605,8 +622,11 @@ static uint32_t proc_invoke_cmd(struct teec_session *session,
 	int32_t ret;
 	uint32_t teec_ret;
 
+	livepatch_down_read_sem();
 	ret = tc_ns_send_cmd(session->context->dev, cli_context);
-	if (!ret) {
+	livepatch_up_read_sem();
+
+	if (ret == 0) {
 		tlogd("invoke cmd success\n");
 		teec_ret = TEEC_SUCCESS;
 	} else if (ret < 0) {
@@ -646,7 +666,7 @@ uint32_t teek_invoke_command(struct teec_session *session, uint32_t cmd_id,
 	}
 
 	teec_ret = teek_check_operation(operation);
-	if (teec_ret) {
+	if (teec_ret != 0) {
 		tloge("operation is invalid\n");
 		goto set_ori;
 	}
@@ -654,7 +674,7 @@ uint32_t teek_invoke_command(struct teec_session *session, uint32_t cmd_id,
 	/* Paramters all right, start execution */
 	teec_ret = teek_init_context(&cli_context, session->service_id,
 		session->session_id, cmd_id, &cli_login);
-	if (teec_ret) {
+	if (teec_ret != 0) {
 		tloge("init cli context failed\n");
 		goto set_ori;
 	}
@@ -663,7 +683,7 @@ uint32_t teek_invoke_command(struct teec_session *session, uint32_t cmd_id,
 	if (operation) {
 		cli_context.started = operation->cancel_flag;
 		teec_ret = proc_teek_encode(&cli_context, operation);
-		if (teec_ret) {
+		if (teec_ret != 0) {
 			goto set_ori;
 		}
 	}
@@ -671,7 +691,7 @@ uint32_t teek_invoke_command(struct teec_session *session, uint32_t cmd_id,
 	teec_ret = proc_invoke_cmd(session, &cli_context, &origin);
 
 set_ori:
-	if (teec_ret && return_origin)
+	if ((teec_ret != 0) && return_origin)
 		*return_origin = origin;
 	return teec_ret;
 }
@@ -680,14 +700,18 @@ EXPORT_SYMBOL(teek_invoke_command);
 uint32_t teek_send_secfile(struct teec_session *session,
 	const char *file_buffer, unsigned int file_size)
 {
-	if (!file_buffer || !file_size || !session ||
+	uint32_t ret;
+
+	if (!file_buffer || (file_size == 0) || !session ||
 		!session->context || !session->context->dev) {
 		tloge("params error!\n");
 		return TEEC_ERROR_BAD_PARAMETERS;
 	}
-
-	return (uint32_t)tc_ns_load_image_with_lock(session->context->dev,
-		file_buffer, file_size, LOAD_TA);
+	livepatch_down_read_sem();
+	ret = (uint32_t)tc_ns_load_image_with_lock(session->context->dev,
+			file_buffer, file_size, LOAD_TA);
+	livepatch_up_read_sem();
+	return ret;
 }
 EXPORT_SYMBOL(teek_send_secfile);
 
@@ -706,6 +730,8 @@ EXPORT_SYMBOL(TEEK_SendSecfile);
 uint32_t teek_register_shared_memory(struct teec_context *context,
 	struct teec_sharedmemory *sharedmem)
 {
+	(void)context;
+	(void)sharedmem;
 	tloge("teek_register_shared_memory not supported\n");
 	return TEEC_ERROR_NOT_SUPPORTED;
 }
@@ -750,7 +776,7 @@ TEEC_Result TEEK_OpenSession(TEEC_Context *context, TEEC_Session *session,
 {
 	return (TEEC_Result)teek_open_session(
 		(struct teec_context *)context, (struct teec_session *)session,
-		(struct teec_uuid *)destination, connectionMethod, connectionData,
+		(const struct teec_uuid *)destination, connectionMethod, connectionData,
 		(struct teec_operation *)operation, returnOrigin);
 }
 EXPORT_SYMBOL(TEEK_OpenSession);

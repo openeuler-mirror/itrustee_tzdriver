@@ -21,7 +21,7 @@
 #include <linux/types.h>
 
 #if ((defined(CONFIG_BBOX_MEM) || defined(CONFIG_RDR_MEM) || \
-	defined(CONFIG_PAGES_MEM) || defined(CONFIG_TEELOG)))
+	defined(CONFIG_PAGES_MEM)) && defined(CONFIG_TEELOG))
 int register_log_mem(uint64_t *addr, uint32_t *len);
 int register_log_exception(void);
 void report_log_system_error(void);
@@ -62,7 +62,11 @@ static inline void unmap_log_mem(const int *log_buffer)
 {
 	(void)log_buffer;
 }
-
+static inline void get_log_chown(const uid_t *user, const gid_t *group)
+{
+	(void)user;
+	(void)group;
+}
 static inline void unregister_log_exception(void)
 {
 }

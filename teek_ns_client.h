@@ -22,12 +22,12 @@
 #include <linux/list.h>
 #include <linux/slab.h>
 #include <linux/completion.h>
-#include <securec.h>
 #include "tc_ns_client.h"
 #include "tc_ns_log.h"
 
 #define TC_NS_CLIENT_IOC_MAGIC  't'
 #define TC_NS_CLIENT_DEV        "tc_ns_client"
+#define TC_PRIV_DEV             "tc_private"
 #define TC_NS_CLIENT_DEV_NAME   "/dev/tc_ns_client"
 
 #define EXCEPTION_MEM_SIZE (8*1024) /* mem for exception handling */
@@ -103,6 +103,10 @@ struct tc_ns_dev_file {
 	 */
 	bool login_setup;
 	struct mutex login_setup_lock; /* for login_setup */
+#ifdef CONFIG_AUTH_HASH
+	bool cainfo_hash_setup;
+	struct mutex cainfo_hash_setup_lock;
+#endif
 	uint32_t pkg_name_len;
 	uint8_t pkg_name[MAX_PACKAGE_NAME_LEN];
 	uint32_t pub_key_len;
@@ -120,10 +124,6 @@ union tc_ns_parameter {
 		unsigned int a;
 		unsigned int b;
 	} value;
-	struct {
-		unsigned int buffer;
-		unsigned int size;
-	} sharedmem;
 };
 
 struct tc_ns_login {
@@ -169,8 +169,8 @@ struct tc_ns_smc_cmd {
 	int          ret_val;
 	unsigned int event_nr;
 	unsigned int uid;
-	unsigned int ca_pid;         /* pid */
-	unsigned int pid;            /* tgid */
+	unsigned int ca_pid; /* pid */
+	unsigned int pid;    /* tgid */
 	unsigned int eventindex;     /* tee audit event index for upload */
 	bool started;
 } __attribute__((__packed__));
@@ -202,7 +202,31 @@ struct tc_ns_session {
 struct mb_cmd_pack {
 	struct tc_ns_operation operation;
 	unsigned char login_data[MAX_SHA_256_SZ * NUM_OF_SO + MAX_SHA_256_SZ];
+};
 
+struct load_img_params {
+	struct tc_ns_dev_file *dev_file;
+	const char *file_buffer;
+	unsigned int file_size;
+	struct mb_cmd_pack *mb_pack;
+	char *mb_load_mem;
+	struct tc_uuid *uuid_return;
+	unsigned int mb_load_size;
+};
+
+struct tc_call_params {
+	struct tc_ns_dev_file *dev;
+	struct tc_ns_client_context *context;
+	struct tc_ns_session *sess;
+	uint8_t flags;
+};
+
+struct tc_op_params {
+	struct mb_cmd_pack *mb_pack;
+	struct tc_ns_smc_cmd *smc_cmd;
+	struct tc_ns_temp_buf local_tmpbuf[TEE_PARAM_NUM];
+	uint32_t trans_paramtype[TEE_PARAM_NUM];
+	bool op_inited;
 };
 
 #endif

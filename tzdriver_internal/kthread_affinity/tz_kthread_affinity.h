@@ -21,27 +21,9 @@
 #include <linux/sched.h>
 #include <linux/workqueue.h>
 
-#define TZ_WQ_MAX_ACTIVE 1
-
 #ifdef CONFIG_KTHREAD_AFFINITY
 void init_kthread_cpumask(void);
 void tz_kthread_bind_mask(struct task_struct *kthread);
 void tz_workqueue_bind_mask(struct workqueue_struct *wq, uint32_t flag);
-#else
-static inline void init_kthread_cpumask(void)
-{
-}
-
-static inline void tz_kthread_bind_mask(struct task_struct *kthread)
-{
-	(void)kthread;
-}
-
-static inline void tz_workqueue_bind_mask(struct workqueue_struct *wq,
-	uint32_t flag)
-{
-	(void)wq;
-	(void)flag;
-}
 #endif
 #endif

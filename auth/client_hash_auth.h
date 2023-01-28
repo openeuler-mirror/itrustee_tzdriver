@@ -25,16 +25,30 @@
 #ifdef CONFIG_CLIENT_AUTH
 #include "auth_base_impl.h"
 
-int calc_client_auth_hash(struct tc_ns_dev_file *dev_file, 
-    struct tc_ns_client_context *context, struct tc_ns_session *session);
+int calc_client_auth_hash(struct tc_ns_dev_file *dev_file,
+	struct tc_ns_client_context *context, struct tc_ns_session *session);
 
 #else
-static inline int calc_client_auth_hash(struct tc_ns_dev_file *dev_file, 
-    struct tc_ns_client_context *context, struct tc_ns_session *session)
+
+static inline int calc_client_auth_hash(struct tc_ns_dev_file *dev_file,
+	struct tc_ns_client_context *context, struct tc_ns_session *session)
 {
-    return 0;
+	(void)dev_file;
+	(void)context;
+	(void)session;
+	return 0;
 }
 
+#endif
+
+#ifdef CONFIG_AUTH_SUPPORT_UNAME
+#define MAX_NAME_LENGTH 256
+
+int tc_ns_get_uname(uint32_t uid, char *username, int buffer_len, uint32_t *out_len);
+#endif
+
+#ifdef CONFIG_AUTH_HASH
+int set_login_information_hash(struct tc_ns_dev_file *hash_dev_file);
 #endif
 
 #endif

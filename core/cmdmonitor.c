@@ -33,16 +33,15 @@
 
 #include "tc_ns_log.h"
 #include "smc_smp.h"
+#include "internal_functions.h"
 #include "mailbox_mempool.h"
 #include "tlogger.h"
 #include "log_cfg_api.h"
-#include "tz_kthread_affinity.h"
 
 static int g_cmd_need_archivelog;
 static LIST_HEAD(g_cmd_monitor_list);
 static int g_cmd_monitor_list_size;
-/* report 2 hours */
-static const long long g_memstat_report_freq = 2 * 60 * 60 * 1000;
+
 #define MAX_CMD_MONITOR_LIST 200
 #define MAX_AGENT_CALL_COUNT 250
 static DEFINE_MUTEX(g_cmd_monitor_lock);
@@ -51,21 +50,17 @@ static DEFINE_MUTEX(g_cmd_monitor_lock);
 static struct workqueue_struct *g_cmd_monitor_wq;
 static struct delayed_work g_cmd_monitor_work;
 static struct delayed_work g_cmd_monitor_work_archive;
-static struct delayed_work g_mem_stat;
 static int g_tee_detect_ta_crash;
 
-static void get_time_spec(struct time_spec *time)
+void get_time_spec(struct time_spec *time)
 {
+	if (!time)
+		return;
 #if (LINUX_VERSION_CODE < KERNEL_VERSION(4, 19, 0))
 	time->ts = current_kernel_time();
 #else
 	ktime_get_coarse_ts64(&time->ts);
 #endif
-}
-
-static void schedule_memstat_work(struct delayed_work *work, unsigned long delay)
-{
-	schedule_delayed_work(work, delay);
 }
 
 static void schedule_cmd_monitor_work(struct delayed_work *work,
@@ -77,12 +72,7 @@ static void schedule_cmd_monitor_work(struct delayed_work *work,
 		schedule_delayed_work(work, delay);
 }
 
-void tzdebug_memstat(void)
-{
-	schedule_memstat_work(&g_mem_stat, usecs_to_jiffies(S_TO_MS));
-}
-
-void tzdebug_archivelog(void)
+static void tz_archivelog(void)
 {
 	schedule_cmd_monitor_work(&g_cmd_monitor_work_archive,
 		usecs_to_jiffies(0));
@@ -92,7 +82,8 @@ void cmd_monitor_ta_crash(int32_t type)
 {
 	g_tee_detect_ta_crash = ((type == TYPE_CRASH_TEE) ?
 		TYPE_CRASH_TEE : TYPE_CRASH_TA);
-	tzdebug_archivelog();
+	tz_archivelog();
+	fault_monitor_start(type);
 }
 
 static int get_pid_name(pid_t pid, char *comm, size_t size)
@@ -119,14 +110,14 @@ static int get_pid_name(pid_t pid, char *comm, size_t size)
 	}
 
 	sret = strncpy_s(comm, size, task->comm, strlen(task->comm));
-	if (sret)
-		tloge("strncpy faild: errno = %d\n", sret);
+	if (sret != 0)
+		tloge("strncpy failed: errno = %d\n", sret);
 	put_task_struct(task);
 
 	return sret;
 }
 
-bool is_thread_reported(unsigned int tid)
+bool is_thread_reported(pid_t tid)
 {
 	bool ret = false;
 	struct cmd_monitor *monitor = NULL;
@@ -165,12 +156,11 @@ void cmd_monitor_reset_context(void)
 }
 
 /*
-* if one session timeout, monitor will print timedifs every step[N] in seconds,
-* if lasted more than 360s, monitor will print timedifs every 360 seconds
-*/
+ * if one session timeout, monitor will print timedifs every step[n] in seconds,
+ * if lasted more then 360s, monitor will print timedifs every 360s.
+ */
 const int32_t g_timer_step[] = {1, 1, 1, 2, 5, 10, 40, 120, 180, 360};
 const int32_t g_timer_nums = sizeof(g_timer_step) / sizeof(int32_t);
-
 static void show_timeout_cmd_info(struct cmd_monitor *monitor)
 {
 	long long timedif, timedif2;
@@ -194,24 +184,29 @@ static void show_timeout_cmd_info(struct cmd_monitor *monitor)
 			monitor->pid, monitor->pname, monitor->tid,
 			monitor->tname, monitor->lastcmdid,
 			monitor->agent_call_count, timedif);
+		/* threads out of white table need info dump */
+		tlogw("monitor: pid-%d", monitor->pid);
+		if (!is_tui_in_use(monitor->tid)) {
+			show_cmd_bitmap();
+			g_cmd_need_archivelog = 1;
+			wakeup_tc_siq(SIQ_DUMP_TIMEOUT);
+		}
 	}
 
-	timedif2 = S_TO_MS * (nowtime.ts.tv_sec - monitor->lasttime.ts.tv_sec) + 
+	timedif2 = S_TO_MS * (nowtime.ts.tv_sec - monitor->lasttime.ts.tv_sec) +
 		(nowtime.ts.tv_nsec - monitor->lasttime.ts.tv_nsec) / S_TO_US;
 	time_in_sec = monitor->timer_index >= g_timer_nums ?
 		g_timer_step[g_timer_nums - 1] : g_timer_step[monitor->timer_index];
-
 	if (timedif2 > time_in_sec * S_TO_MS) {
 		monitor->lasttime = nowtime;
-		monitor->timer_index = monitor->timer_index >= sizeof(g_timer_step) ?
-			sizeof(g_timer_step) : (monitor->timer_index + 1);
+		monitor->timer_index = monitor->timer_index >= (int32_t)sizeof(g_timer_step) ?
+			(int32_t)sizeof(g_timer_step) : (monitor->timer_index + 1);
 		tlogw("[cmd_monitor_tick] pid=%d,pname=%s,tid=%d, "
 			"lastcmdid=%u,agent call count:%d,timedif=%lld ms\n",
 			monitor->pid, monitor->pname, monitor->tid,
 			monitor->lastcmdid, monitor->agent_call_count,
 			timedif);
 	}
-
 }
 
 static void cmd_monitor_tick(void)
@@ -223,7 +218,7 @@ static void cmd_monitor_tick(void)
 	list_for_each_entry_safe(monitor, tmp, &g_cmd_monitor_list, list) {
 		if (monitor->returned) {
 			g_cmd_monitor_list_size--;
-			tlogi("[cmd_monitor_tick] pid=%d,pname=%s,tid=%d, "
+			tlogd("[cmd_monitor_tick] pid=%d,pname=%s,tid=%d, "
 				"tname=%s,lastcmdid=%u,count=%d,agent call count=%d, "
 				"timetotal=%lld us returned, remained command(s)=%d\n",
 				monitor->pid, monitor->pname, monitor->tid, monitor->tname,
@@ -271,7 +266,7 @@ static struct cmd_monitor *init_monitor_locked(void)
 
 	newitem = kzalloc(sizeof(*newitem), GFP_KERNEL);
 	if (ZERO_OR_NULL_PTR((unsigned long)(uintptr_t)newitem)) {
-		tloge("[cmd_monitor_tick]kzalloc faild\n");
+		tloge("[cmd_monitor_tick]kzalloc failed\n");
 		return NULL;
 	}
 
@@ -285,10 +280,10 @@ static struct cmd_monitor *init_monitor_locked(void)
 	newitem->pid = current->tgid;
 	newitem->tid = current->pid;
 	if (get_pid_name(newitem->pid, newitem->pname,
-		sizeof(newitem->pname)))
+		sizeof(newitem->pname)) != 0)
 		newitem->pname[0] = '\0';
 	if (get_pid_name(newitem->tid, newitem->tname,
-		sizeof(newitem->tname)))
+		sizeof(newitem->tname)) != 0)
 		newitem->tname[0] = '\0';
 	INIT_LIST_HEAD(&newitem->list);
 	list_add_tail(&newitem->list, &g_cmd_monitor_list);
@@ -329,8 +324,7 @@ struct cmd_monitor *cmd_monitor_log(const struct tc_ns_smc_cmd *cmd)
 
 		if (!found_flag) {
 #ifndef CONFIG_BIG_SESSION
-			if (g_cmd_monitor_list_size >
-				MAX_CMD_MONITOR_LIST - 1) {
+			if (g_cmd_monitor_list_size > MAX_CMD_MONITOR_LIST - 1) {
 				tloge("monitor reach max node num\n");
 				monitor = NULL;
 				break;
@@ -396,4 +390,25 @@ void init_cmd_monitor(void)
 		(uintptr_t)&g_cmd_monitor_work, cmd_monitor_tickfn);
 	INIT_DEFERRABLE_WORK((struct delayed_work *)
 		(uintptr_t)&g_cmd_monitor_work_archive, cmd_monitor_archivefn);
+}
+
+void free_cmd_monitor(void)
+{
+	struct cmd_monitor *monitor = NULL;
+	struct cmd_monitor *tmp = NULL;
+
+	mutex_lock(&g_cmd_monitor_lock);
+	list_for_each_entry_safe(monitor, tmp, &g_cmd_monitor_list, list) {
+		list_del(&monitor->list);
+		kfree(monitor);
+	}
+	mutex_unlock(&g_cmd_monitor_lock);
+
+	flush_delayed_work(&g_cmd_monitor_work);
+	flush_delayed_work(&g_cmd_monitor_work_archive);
+	if (g_cmd_monitor_wq) {
+		flush_workqueue(g_cmd_monitor_wq);
+		destroy_workqueue(g_cmd_monitor_wq);
+		g_cmd_monitor_wq = NULL;
+	}
 }

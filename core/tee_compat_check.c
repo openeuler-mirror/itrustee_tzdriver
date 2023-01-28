@@ -22,7 +22,7 @@
 #include "teek_ns_client.h"
 #include "tc_ns_log.h"
 
-int32_t check_teeos_compat_level(uint32_t *buffer, uint32_t size)
+int32_t check_teeos_compat_level(const uint32_t *buffer, uint32_t size)
 {
 	const uint16_t major = TEEOS_COMPAT_LEVEL_MAJOR;
 	const uint16_t minor = TEEOS_COMPAT_LEVEL_MINOR;
@@ -42,7 +42,7 @@ int32_t check_teeos_compat_level(uint32_t *buffer, uint32_t size)
 		return -EPERM;
 	}
 	/* just print warning */
-	if (buffer[2] != minor) 
+	if (buffer[2] != minor)
 		tlogw("check minor ver failed, minor tz=%u, minor tee=%u\n",
 			minor, buffer[2]);
 	return 0;

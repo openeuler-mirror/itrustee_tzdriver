@@ -43,7 +43,8 @@
 #include "mailbox_mempool.h"
 #include "smc_smp.h"
 #include "session_manager.h"
-#include "tz_kthread_affinity.h"
+#include "internal_functions.h"
+#include "shared_mem.h"
 
 #define DEFAULT_SPI_NUM 111
 
@@ -128,7 +129,7 @@ union notify_context {
 
 struct notify_data_entry {
 	uint32_t entry_type : 31;
-	uint32_t filled	 : 1;
+	uint32_t filled : 1;
 	union notify_context context;
 };
 
@@ -192,7 +193,7 @@ static void walk_callback_list(
 	list_for_each_entry(callback_func_t,
 		&g_ta_callback_func_list.callback_list, head) {
 		if (memcmp(callback_func_t->uuid, tc_notify_data_timer->uuid,
-			UUID_SIZE))
+			UUID_SIZE) != 0)
 			continue;
 
 		if (tc_notify_data_timer->property.timer_class ==
@@ -234,10 +235,10 @@ static int find_notify_sess(
 			temp_svc =
 				tc_find_service_in_dev(temp_dev_file,
 					tc_notify_data_timer->uuid, UUID_LEN);
+			get_service_struct(temp_svc);
 			mutex_unlock(&temp_dev_file->service_lock);
 			if (!temp_svc)
 				break;
-			get_service_struct(temp_svc);
 			mutex_lock(&temp_svc->session_lock);
 			*temp_ses =
 				tc_find_session_withowner(
@@ -275,7 +276,7 @@ static void tc_notify_timer_fn(struct notify_data_entry *notify_data_entry)
 	      tc_notify_data_timer->property.timer_id);
 	walk_callback_list(tc_notify_data_timer);
 
-	if (find_notify_sess(tc_notify_data_timer, &temp_ses, &enc_found))
+	if (find_notify_sess(tc_notify_data_timer, &temp_ses, &enc_found) != 0)
 		return;
 
 	if (tc_notify_data_timer->property.timer_class == TIMER_GENERIC) {
@@ -308,7 +309,7 @@ static noinline int get_notify_data_entry(struct notify_data_entry *copy)
 		struct notify_data_entry *e = &g_notify_data->entry[i];
 		filled = e->filled;
 		smp_mb();
-		if (!filled)
+		if (filled == 0)
 			continue;
 		switch (e->entry_type) {
 		case NOTIFY_DATA_ENTRY_TIMER:
@@ -381,7 +382,7 @@ static void tc_notify_shadowexit_fn(const struct notify_data_entry *entry)
 	const struct notify_context_wakeup *tc_notify_wakeup = NULL;
 
 	tc_notify_wakeup = &(entry->context.wakeup);
-	if (smc_shadow_exit(tc_notify_wakeup->ca_thread_id))
+	if (smc_shadow_exit(tc_notify_wakeup->ca_thread_id) != 0)
 		tloge("shadow ca exit failed: %d\n",
 			(int)tc_notify_wakeup->ca_thread_id);
 }
@@ -442,25 +443,26 @@ static void spi_broadcast_notifications(void)
 		return;
 	}
 
-	missed = __xchg(0, &g_notify_data->meta.context.meta.missed,
+	missed = (uint32_t)__xchg(0, &g_notify_data->meta.context.meta.missed,
 		MISSED_COUNT);
-	if (!missed)
+	if (missed == 0)
 		return;
-	if (missed & (1U << NOTIFY_DATA_ENTRY_WAKEUP)) {
+	if ((missed & (1U << NOTIFY_DATA_ENTRY_WAKEUP)) != 0) {
 		smc_wakeup_broadcast();
 		missed &= ~(1U << NOTIFY_DATA_ENTRY_WAKEUP);
 	}
-	if (missed & (1U << NOTIFY_DATA_ENTRY_FIQSHD)) {
+	if ((missed & (1U << NOTIFY_DATA_ENTRY_FIQSHD)) != 0) {
 		tc_notify_fiqshd_fn(NULL);
 		missed &= ~(1U << NOTIFY_DATA_ENTRY_FIQSHD);
 	}
-	if (missed)
+	if (missed != 0)
 		tloge("missed spi notification mask %x\n", missed);
 }
 
 static void tc_notify_fn(struct work_struct *dummy)
 {
 	struct notify_data_entry copy = {0};
+	(void)dummy;
 
 	while (get_notify_data_entry(&copy) == 0) {
 		switch (copy.entry_type) {
@@ -488,7 +490,7 @@ static void tc_notify_fn(struct work_struct *dummy)
 		default:
 			tloge("invalid entry type = %u\n", copy.entry_type);
 		}
-		if (memset_s(&copy, sizeof(copy), 0, sizeof(copy)))
+		if (memset_s(&copy, sizeof(copy), 0, sizeof(copy)) != 0)
 			tloge("memset copy failed\n");
 	}
 	spi_broadcast_notifications();
@@ -498,18 +500,26 @@ static irqreturn_t tc_secure_notify(int irq, void *dev_id)
 {
 #define N_WORK  8
 	int i;
+	int queued = 0;
 	static struct work_struct tc_notify_works[N_WORK];
 	static int init;
+	(void)dev_id;
 
-	if (!init) {
+	if (init == 0) {
 		for (i = 0; i < N_WORK; i++)
 			INIT_WORK(&tc_notify_works[i], tc_notify_fn);
 		init = 1;
 	}
 	for (i = 0; i < N_WORK; i++) {
-		if (queue_work(g_tz_spi_wq, &tc_notify_works[i]))
+		if (queue_work(g_tz_spi_wq, &tc_notify_works[i])) {
+			queued = 1;
 			break;
+		}
 	}
+	if (queued == 1)
+		tee_trace_add_event(INTERRUPT_HANDLE_SPI_REE_RESPONSE, (uint64_t)irq);
+	else
+		tee_trace_add_event(INTERRUPT_HANDLE_SPI_REE_MISS, (uint64_t)irq);
 #undef N_WORK
 
 	return IRQ_HANDLED;
@@ -534,7 +544,7 @@ int tc_ns_register_service_call_back_func(const char *uuid, void *func,
 	}
 	list_for_each_entry(callback_func,
 		&g_ta_callback_func_list.callback_list, head) {
-		if (!memcmp(callback_func->uuid, uuid, UUID_SIZE)) {
+		if (memcmp(callback_func->uuid, uuid, UUID_SIZE) == 0) {
 			callback_func->callback_func = (void (*)(void *))func;
 			tlogd("succeed to find uuid ta_callback_func_list\n");
 			goto find_callback;
@@ -548,7 +558,7 @@ int tc_ns_register_service_call_back_func(const char *uuid, void *func,
 		goto find_callback;
 	}
 
-	if (memcpy_s(new_callback->uuid, UUID_SIZE, uuid, UUID_SIZE)) {
+	if (memcpy_s(new_callback->uuid, UUID_SIZE, uuid, UUID_SIZE) != 0) {
 		kfree(new_callback);
 		new_callback = NULL;
 		ret = -ENOMEM;
@@ -583,7 +593,7 @@ int tc_ns_tst_cmd(void *argp)
 	return 0;
 }
 
-static int send_notify_cmd(unsigned int cmd_id)
+int send_notify_cmd(unsigned int cmd_id)
 {
 	struct tc_ns_smc_cmd smc_cmd = { {0}, 0 };
 	int ret = 0;
@@ -597,27 +607,35 @@ static int send_notify_cmd(unsigned int cmd_id)
 		TEE_PARAM_TYPE_VALUE_INPUT |
 		TEE_PARAM_TYPE_VALUE_INPUT << TEE_PARAM_NUM;
 	mb_pack->operation.params[0].value.a =
-		virt_to_phys(g_notify_data);
-	mb_pack->operation.params[0].value.b = (uint64_t)virt_to_phys(g_notify_data) >> ADDR_TRANS_NUM;
+		(unsigned int)(get_spi_mem_paddr((uintptr_t)g_notify_data));
+	mb_pack->operation.params[0].value.b =
+		(unsigned int)(get_spi_mem_paddr((uintptr_t)g_notify_data) >> ADDR_TRANS_NUM);
 	mb_pack->operation.params[1].value.a = SZ_4K;
 	smc_cmd.cmd_type = CMD_TYPE_GLOBAL;
 	smc_cmd.cmd_id = cmd_id;
 	smc_cmd.operation_phys =
-		virt_to_phys(&mb_pack->operation);
-	smc_cmd.operation_h_phys = (uint64_t)virt_to_phys(&mb_pack->operation) >> ADDR_TRANS_NUM;
+		(unsigned int)mailbox_virt_to_phys((uintptr_t)&mb_pack->operation);
+	smc_cmd.operation_h_phys =
+		(unsigned int)((uint64_t)mailbox_virt_to_phys((uintptr_t)&mb_pack->operation) >> ADDR_TRANS_NUM);
 
-	if (tc_ns_smc(&smc_cmd)) {
+	if (is_tee_rebooting())
+		ret = send_smc_cmd_rebooting(TSP_REQUEST, 0, 0, &smc_cmd);
+	else
+		ret = tc_ns_smc(&smc_cmd);
+
+	if (ret != 0) {
 		ret = -EPERM;
 		tloge("register notify mem failed\n");
 	}
+
 	mailbox_free(mb_pack);
 
 	return ret;
 }
 
+static unsigned int g_irq = DEFAULT_SPI_NUM;
 static int config_spi_context(struct device *class_dev, struct device_node *np)
 {
-	unsigned int irq = DEFAULT_SPI_NUM;
 	int ret;
 
 #ifndef CONFIG_ACPI
@@ -629,14 +647,14 @@ static int config_spi_context(struct device *class_dev, struct device_node *np)
 
 	/* Map IRQ 0 from the OF interrupts list */
 #ifdef CONFIG_ACPI
-	irq = (unsigned int)get_acpi_tz_irq();
+	g_irq = (unsigned int)get_acpi_tz_irq();
 #else
-	irq = irq_of_parse_and_map(np, 0);
+	g_irq = irq_of_parse_and_map(np, 0);
 #endif
-	ret = devm_request_irq(class_dev, irq, tc_secure_notify,
+	ret = devm_request_irq(class_dev, g_irq, tc_secure_notify,
 		IRQF_NO_SUSPEND, TC_NS_CLIENT_DEV, NULL);
 	if (ret < 0) {
-		tloge("device irq %u request failed %d", irq, ret);
+		tloge("device irq %u request failed %d", g_irq, ret);
 		return ret;
 	}
 
@@ -664,19 +682,11 @@ int tz_spi_init(struct device *class_dev, struct device_node *np)
 	tz_workqueue_bind_mask(g_tz_spi_wq, WQ_HIGHPRI);
 
 	ret = config_spi_context(class_dev, np);
-	if (ret)
+	if (ret != 0)
 		goto clean;
 
 	if (!g_notify_data) {
-#ifdef CONFIG_BIG_SESSION
-		/* we should map at least 3 pages for 100 sessions, 2^2 > 3 */
-		g_notify_data = (struct notify_data_struct *)
-			(uintptr_t)__get_free_pages(
-			GFP_KERNEL | __GFP_ZERO, CONFIG_NOTIFY_PAGE_ORDER);
-#else
-		g_notify_data = (struct notify_data_struct *)
-			(uintptr_t)__get_free_page(GFP_KERNEL | __GFP_ZERO);
-#endif
+		g_notify_data = (struct notify_data_struct *)(uintptr_t)get_spi_mem_vaddr();
 		if (!g_notify_data) {
 			tloge("get free page failed for notification data\n");
 			ret = -ENOMEM;
@@ -684,10 +694,10 @@ int tz_spi_init(struct device *class_dev, struct device_node *np)
 		}
 
 		ret = send_notify_cmd(GLOBAL_CMD_ID_REGISTER_NOTIFY_MEMORY);
-		if (ret) {
+		if (ret != 0) {
 			tloge("shared memory failed ret is 0x%x\n", ret);
 			ret = -EFAULT;
-			free_page((unsigned long)(uintptr_t)g_notify_data);
+			free_spi_mem((uint64_t)(uintptr_t)g_notify_data);
 			g_notify_data = NULL;
 			goto clean;
 		}
@@ -700,21 +710,14 @@ int tz_spi_init(struct device *class_dev, struct device_node *np)
 
 	return 0;
 clean:
-	tz_spi_exit();
+	free_tz_spi(class_dev);
 	return ret;
 }
 
-void tz_spi_exit(void)
+void free_tz_spi(struct device *class_dev)
 {
 	if (g_notify_data) {
-		if (send_notify_cmd(GLOBAL_CMD_ID_UNREGISTER_NOTIFY_MEMORY))
-			tloge("unregister notify data mem failed\n");
-#ifdef CONFIG_BIG_SESSION
-		free_pages((unsigned long)(uintptr_t)g_notify_data,
-			CONFIG_NOTIFY_PAGE_ORDER);
-#else
-		free_page((unsigned long)(uintptr_t)g_notify_data);
-#endif
+		free_spi_mem((uint64_t)(uintptr_t)g_notify_data);
 		g_notify_data = NULL;
 	}
 
@@ -723,4 +726,8 @@ void tz_spi_exit(void)
 		destroy_workqueue(g_tz_spi_wq);
 		g_tz_spi_wq = NULL;
 	}
+	if (!class_dev)
+		return;
+
+	devm_free_irq(class_dev, g_irq, NULL);
 }

@@ -66,7 +66,7 @@ static inline struct workqueue_attrs *koadpt_alloc_workqueue_attrs(
 #else
 	(void)gfp_mask;
 	return alloc_workqueue_attrs();
-#endif	
+#endif
 }
 
 static inline void koadpt_free_workqueue_attrs(struct workqueue_attrs *attrs)

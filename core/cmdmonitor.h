@@ -19,6 +19,7 @@
 #define CMD_MONITOR_H
 
 #include "teek_ns_client.h"
+#include "smc_smp.h"
 #include <linux/version.h>
 
 #if (KERNEL_VERSION(4, 14, 0) > LINUX_VERSION_CODE)
@@ -67,11 +68,11 @@ struct cmd_monitor *cmd_monitor_log(const struct tc_ns_smc_cmd *cmd);
 void cmd_monitor_reset_context(void);
 void cmd_monitor_logend(struct cmd_monitor *item);
 void init_cmd_monitor(void);
+void free_cmd_monitor(void);
 void do_cmd_need_archivelog(void);
-bool is_thread_reported(unsigned int tid);
+bool is_thread_reported(pid_t tid);
 void tzdebug_archivelog(void);
 void cmd_monitor_ta_crash(int32_t type);
-void memstat_report(void);
-void tzdebug_memstat(void);
+void get_time_spec(struct time_spec *time);
 
 #endif

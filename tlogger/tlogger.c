@@ -25,6 +25,7 @@
 #include <asm/ioctls.h>
 #include <linux/syscalls.h>
 #include <securec.h>
+#include <asm/io.h>
 #include "smc_smp.h"
 #include "mailbox_mempool.h"
 #include "teek_client_constants.h"
@@ -33,6 +34,7 @@
 #include "log_cfg_api.h"
 #include "tc_ns_log.h"
 #include "ko_adapt.h"
+#include "internal_functions.h"
 
 /* for log item ----------------------------------- */
 #define LOG_ITEM_MAGIC          0x5A5A
@@ -42,7 +44,7 @@
 
 /* =================================================== */
 #define LOGGER_LOG_TEEOS        "teelog" /* tee os log */
-#define __TEELOGGERIO           0xBE /* for ioctl */
+#define LOGGERIOCTL             0xBE /* for ioctl */
 
 #define DUMP_START_MAGIC "Dump SPI notification"
 #define DUMP_END_MAGIC "Dump task states END"
@@ -55,14 +57,14 @@
 /* get tee verison */
 #define MAX_TEE_VERSION_LEN     256
 #define TEELOGGER_GET_VERSION \
-	_IOR(__TEELOGGERIO, GET_VERSION_BASE, char[MAX_TEE_VERSION_LEN])
+	_IOR(LOGGERIOCTL, GET_VERSION_BASE, char[MAX_TEE_VERSION_LEN])
 /* set the log reader pos to current pos */
 #define TEELOGGER_SET_READERPOS_CUR \
-	_IO(__TEELOGGERIO, SET_READERPOS_CUR_BASE)
+	_IO(LOGGERIOCTL, SET_READERPOS_CUR_BASE)
 #define TEELOGGER_SET_TLOGCAT_STAT \
-	_IO(__TEELOGGERIO, SET_TLOGCAT_STAT_BASE)
+	_IO(LOGGERIOCTL, SET_TLOGCAT_STAT_BASE)
 #define TEELOGGER_GET_TLOGCAT_STAT \
-	_IO(__TEELOGGERIO, GET_TLOGCAT_STAT_BASE)
+	_IO(LOGGERIOCTL, GET_TLOGCAT_STAT_BASE)
 
 int g_tlogcat_f = 0;
 
@@ -87,8 +89,9 @@ struct log_item {
 	unsigned char uuid[UUID_LEN];
 	unsigned char log_source_type;
 	unsigned char reserved[LOG_ITEM_RESERVED_LEN];
+	unsigned char log_level;
 	unsigned char new_line; /* '\n' char, easy viewing log in bbox.bin file */
-	unsigned char log_buffer[0];
+	unsigned char log_buffer[];
 };
 
 /* --- for log mem --------------------------------- */
@@ -109,14 +112,14 @@ struct log_buffer_flag {
 	uint32_t last_pos;
 	uint32_t write_loops;
 	uint32_t log_level;
-	uint32_t reserved[LOG_BUFFER_RESERVED_LEN];
+	uint32_t reserved[LOG_BUFFER_RESERVED_LEN]; /* [0] for magic, [1] for serial_no */
 	uint32_t max_len;
 	unsigned char version_info[VERSION_INFO_LEN];
 };
 
 struct log_buffer {
 	struct log_buffer_flag flag;
-	unsigned char buffer_start[0];
+	unsigned char buffer_start[];
 };
 
 static struct log_buffer *g_log_buffer = NULL;
@@ -161,7 +164,7 @@ static struct tlogger_log *get_reader_log(const struct file *file)
 	return reader->log;
 }
 
-static bool check_log_item_validite(struct log_item *item,
+static bool check_log_item_validite(const struct log_item *item,
 	uint32_t item_max_size)
 {
 	bool con = (item && (item->magic == LOG_ITEM_MAGIC) &&
@@ -187,7 +190,7 @@ static struct log_item *get_next_log_item(const unsigned char *buffer_start,
 
 	while ((i + sizeof(*item) + LOG_ITEM_LEN_ALIGN) <= scope_len) {
 		*pos = read_pos + i;
-		item = (struct log_item *)(buffer_start + read_pos + i);
+		item = (struct log_item *)(uintptr_t)(buffer_start + read_pos + i);
 		max_size = (((scope_len - i) > LOG_ITEM_MAX_LEN) ?
 			LOG_ITEM_MAX_LEN : (scope_len - i));
 		if (check_log_item_validite(item, max_size))
@@ -212,7 +215,7 @@ static uint32_t parse_log_item(char __user *buf, size_t count,
 	bool *user_buffer_left)
 {
 	struct log_item *next_item = NULL;
-	uint32_t buf_left;
+	size_t buf_left;
 	uint32_t buf_written;
 	uint32_t item_len;
 	bool con = false;
@@ -242,7 +245,7 @@ static uint32_t parse_log_item(char __user *buf, size_t count,
 
 		start_pos += item_len;
 		if (copy_to_user(buf + buf_written,
-			(void *)next_item, item_len))
+			(void *)next_item, item_len) != 0)
 			tloge("copy failed, item len %u\n", item_len);
 
 		buf_written += item_len;
@@ -275,7 +278,7 @@ static ssize_t get_buffer_info(struct tlogger_reader *reader,
 	ret = memcpy_s(buffer_flag, sizeof(*buffer_flag), &buffer_tmp->flag,
 		sizeof(buffer_tmp->flag));
 	mutex_unlock(&log->mutex_info);
-	if (ret) {
+	if (ret != 0) {
 		tloge("memcpy failed %d\n", ret);
 		return -EAGAIN;
 	}
@@ -287,7 +290,7 @@ static ssize_t get_buffer_info(struct tlogger_reader *reader,
 #define LOG_BUFFER_MAX_LEN      0x100000
 
 static ssize_t get_last_read_pos(struct log_buffer_flag *log_flag,
-	struct tlogger_reader *reader, uint32_t *log_last_pos, uint32_t *is_read)
+	const struct tlogger_reader *reader, uint32_t *log_last_pos, uint32_t *is_read)
 {
 	uint32_t buffer_max_len = g_log_mem_len - sizeof(*g_log_buffer);
 
@@ -332,7 +335,7 @@ static ssize_t proc_read_ret(uint32_t buf_written,
 {
 	ssize_t ret;
 
-	if (!buf_written) {
+	if (buf_written == 0) {
 		ret = LOG_READ_STATUS_ERROR;
 	} else {
 		ret = buf_written;
@@ -342,8 +345,8 @@ static ssize_t proc_read_ret(uint32_t buf_written,
 	return ret;
 }
 
-static ssize_t check_read_params(struct file *file,
-	char __user *buf, size_t count)
+static ssize_t check_read_params(const struct file *file,
+	const char __user *buf, size_t count)
 {
 	if (count < LOG_ITEM_MAX_LEN)
 		return -EINVAL;
@@ -419,7 +422,7 @@ static ssize_t process_tlogger_read(struct file *file,
 	(void)pos;
 
 	ret = check_read_params(file, buf, count);
-	if (ret)
+	if (ret != 0)
 		return ret;
 
 	reader = file->private_data;
@@ -427,11 +430,11 @@ static ssize_t process_tlogger_read(struct file *file,
 		return -EINVAL;
 
 	ret = get_buffer_info(reader, &buffer_flag, &log_buffer);
-	if (ret)
+	if (ret != 0)
 		return ret;
 
 	ret = get_last_read_pos(&buffer_flag, reader, &last_pos, &is_read);
-	if (!is_read)
+	if (is_read == 0)
 		return ret;
 
 	return trigger_parse_log(buf, count, last_pos, log_buffer, reader);
@@ -478,7 +481,7 @@ static int process_tlogger_open(struct inode *inode,
 	tlogd("open logger open ++\n");
 	/* not support seek */
 	ret = nonseekable_open(inode, file);
-	if (ret)
+	if (ret != 0)
 		return ret;
 
 	tlogd("Before get log from minor\n");
@@ -542,8 +545,8 @@ static int process_tlogger_release(struct inode *ignored,
 		g_tlogcat_count--;
 	mutex_unlock(&log->mutex_info);
 
-	tlogi("logger_release r_is_tlogf-%u\n", reader->r_is_tlogf);
-	if (reader->r_is_tlogf)
+	tlogd("logger_release r_is_tlogf-%u\n", reader->r_is_tlogf);
+	if (reader->r_is_tlogf != 0)
 		g_tlogcat_f = 0;
 
 	kfree(reader);
@@ -557,7 +560,7 @@ static unsigned int process_tlogger_poll(struct file *file,
 	struct tlogger_reader *reader = NULL;
 	struct tlogger_log *log = NULL;
 	struct log_buffer *buffer = NULL;
-	unsigned int ret = POLLOUT | POLLWRNORM;
+	uint32_t ret = POLLOUT | POLLWRNORM;
 
 	tlogd("logger_poll ++\n");
 	if (!file) {
@@ -654,21 +657,21 @@ static int get_teeos_version(uint32_t cmd, unsigned long arg)
 {
 	int ret;
 
-	if (!(_IOC_DIR(cmd) & _IOC_READ)) {
+	if ((_IOC_DIR(cmd) & _IOC_READ) == 0) {
 		tloge("check get version cmd failed\n");
 		return -1;
 	}
 
 	ret = check_user_arg(arg,
 		sizeof(g_log_buffer->flag.version_info));
-	if (!ret) {
+	if (ret == 0) {
 		tloge("check version info arg failed\n");
 		return -1;
 	}
 
 	if (copy_to_user((void __user *)(uintptr_t)arg,
 		(void *)g_log_buffer->flag.version_info,
-		sizeof(g_log_buffer->flag.version_info))) {
+		sizeof(g_log_buffer->flag.version_info)) != 0) {
 		tloge("version info copy failed\n");
 		return -1;
 	}
@@ -696,7 +699,7 @@ static long process_tlogger_ioctl(struct file *file,
 
 	switch (cmd) {
 	case TEELOGGER_GET_VERSION:
-		if (!get_teeos_version(cmd, arg))
+		if (get_teeos_version(cmd, arg) == 0)
 			ret = 0;
 		break;
 	case TEELOGGER_SET_READERPOS_CUR:
@@ -747,6 +750,7 @@ static int __init register_device(const char *log_name,
 	int ret;
 	struct tlogger_log *log = NULL;
 	unsigned char *buffer = (unsigned char *)addr;
+	(void)size;
 
 	log = kzalloc(sizeof(*log), GFP_KERNEL);
 	if (!log) {
@@ -788,10 +792,10 @@ out_free_log:
 	return ret;
 }
 
-static struct log_item *msg_get_next(const unsigned char *buffer_start,
-	uint32_t read_pos, int scope_len, uint32_t max_len)
+static struct log_item *msg_get_next(unsigned char *buffer_start,
+	uint32_t read_pos, uint32_t scope_len, uint32_t max_len)
 {
-	int i = 0;
+	uint32_t i = 0;
 	struct log_item *item = NULL;
 	uint32_t item_max_size;
 	uint32_t len;
@@ -820,7 +824,47 @@ static struct log_item *msg_get_next(const unsigned char *buffer_start,
 	return NULL;
 }
 
-#define OPEN_FILE_MODE          0644U
+#ifdef CONFIG_TZDRIVER_MODULE
+/* there is no way to chown in kernel-5.10 for ko */
+static int tlogger_chown(const char *file_path, uint32_t file_path_len)
+{
+	(void)file_path;
+	(void)file_path_len;
+
+	return 0;
+}
+#else
+static int tlogger_chown(const char *file_path, uint32_t file_path_len)
+{
+	(void)file_path_len;
+	uid_t user = ROOT_UID;
+	gid_t group = ROOT_GID;
+	int ret;
+	mm_segment_t old_fs;
+
+	get_log_chown(&user, &group);
+
+	/* not need modify chown attr */
+	if (group == ROOT_GID && user == ROOT_UID)
+		return 0;
+
+	old_fs = get_fs();
+	set_fs(KERNEL_DS);
+#if (KERNEL_VERSION(5, 10, 0) <= LINUX_VERSION_CODE)
+	ret = (int)ksys_chown((const char __user *)file_path, user, group);
+#else
+	ret = (int)sys_chown((const char __user *)file_path, user, group);
+#endif
+	if (ret != 0) {
+		tloge("sys chown for last teemsg file error\n");
+		set_fs(old_fs);
+		return -1;
+	}
+
+	set_fs(old_fs);
+	return 0;
+}
+#endif
 
 static int write_version_to_msg(struct file *filep,
 	loff_t *pos)
@@ -840,7 +884,7 @@ static int write_version_to_msg(struct file *filep,
 }
 
 static int write_part_log_to_msg(struct file *filep,
-	const unsigned char *buffer, uint32_t buffer_max_len, loff_t *pos,
+	unsigned char *buffer, uint32_t buffer_max_len, loff_t *pos,
 	uint32_t read_off, uint32_t read_off_end)
 {
 	struct log_item *next_item = NULL;
@@ -874,7 +918,7 @@ static int write_part_log_to_msg(struct file *filep,
 }
 
 static int write_log_to_msg(struct file *filep,
-	const unsigned char *buffer, uint32_t buffer_max_len, loff_t *pos,
+	unsigned char *buffer, uint32_t buffer_max_len, loff_t *pos,
 	uint32_t read_off, uint32_t read_off_end)
 {
 	if (read_off < read_off_end) {
@@ -888,6 +932,67 @@ static int write_log_to_msg(struct file *filep,
 			0, read_off_end);
 	}
 }
+
+#ifdef CONFIG_TEE_LOG_DUMP_PATH
+static void update_dumpmsg_offset(uint32_t *read_start, uint32_t *read_end,
+	uint32_t read_off, uint32_t read_off_end, uint32_t *dump_start_flag, uint32_t *dump_end_flag)
+{
+	struct log_item *next_item = NULL;
+	unsigned char *buffer = g_log_buffer->buffer_start;
+	uint32_t buffer_max_len = g_log_mem_len - sizeof(*g_log_buffer);
+	ssize_t item_len;
+	ssize_t total_len = 0;
+
+	next_item = msg_get_next(buffer, read_off,
+		LOG_ITEM_MAX_LEN, buffer_max_len);
+
+	while (next_item && read_off <= read_off_end) {
+		item_len = next_item->buffer_len + sizeof(*next_item);
+		if (strstr(next_item->log_buffer, DUMP_START_MAGIC)) {
+			*read_start = read_off;
+			*dump_start_flag = 1;
+		} else if (strstr(next_item->log_buffer, DUMP_END_MAGIC)) {
+			*read_end = read_off;
+			*dump_end_flag = 1;
+		}
+		read_off = (unsigned char *)next_item - buffer + item_len;
+		total_len += item_len;
+		if (total_len >= buffer_max_len)
+			break;
+
+		next_item = msg_get_next(buffer, read_off,
+			LOG_ITEM_MAX_LEN, buffer_max_len);
+	}
+}
+#endif
+
+#ifdef CONFIG_TEE_LOG_DUMP_PATH
+static int get_dumpmsg_offset(uint32_t *read_start, uint32_t *read_end)
+{
+	uint32_t read_off = *read_start;
+	uint32_t read_off_end = *read_end;
+	uint32_t buffer_max_len = g_log_mem_len - sizeof(*g_log_buffer);
+	uint32_t dump_start_flag = 0;
+	uint32_t dump_end_flag = 0;
+
+	if (read_off < read_off_end) {
+		update_dumpmsg_offset(read_start, read_end, read_off, read_off_end,
+			&dump_start_flag, &dump_end_flag);
+	} else {
+		update_dumpmsg_offset(read_start, read_end, read_off, buffer_max_len,
+			&dump_start_flag, &dump_end_flag);
+		update_dumpmsg_offset(read_start, read_end, 0, read_off_end,
+			&dump_start_flag, &dump_end_flag);
+	}
+
+	if (dump_start_flag == 0 || dump_end_flag == 0) {
+		tloge("can't find dump start or end\n");
+		return -1;
+	} else {
+		return 0;
+	}
+}
+#endif
 
 static int get_msg_buffer(unsigned char **buffer, uint32_t *buffer_max_len,
 	uint32_t *read_start, uint32_t *read_end,
@@ -908,7 +1013,18 @@ static int get_msg_buffer(unsigned char **buffer, uint32_t *buffer_max_len,
 
 	*read_start = 0;
 	*read_end = *buffer_max_len;
-
+#ifdef CONFIG_TEE_LOG_DUMP_PATH
+	if (strcmp(file_path, CONFIG_TEE_LOG_DUMP_PATH) == 0) {
+		*read_start = g_last_read_offset;
+		*read_end = ((struct log_buffer*)g_log->buffer_info)->flag.last_pos;
+		if (get_dumpmsg_offset(read_start, read_end) != 0) {
+			tloge("get dump offset failed\n");
+			return -1;
+		}
+	}
+#else
+	(void)file_path;
+#endif
 	addr = kmalloc(*buffer_max_len, GFP_KERNEL);
 	if (ZERO_OR_NULL_PTR((unsigned long)(uintptr_t)addr)) {
 		ret = -ENOMEM;
@@ -936,7 +1052,7 @@ free_res:
 static int open_msg_file(struct file **file,
 	const char *file_path, uint32_t file_path_len)
 {
-	struct file *filep;
+	struct file *filep = NULL;
 	(void)file_path_len;
 
 	filep = filp_open(file_path, O_CREAT | O_RDWR | O_TRUNC, OPEN_FILE_MODE);
@@ -972,16 +1088,20 @@ int tlogger_store_msg(const char *file_path, uint32_t file_path_len)
 	/* copy logs from log memory, then parse the logs */
 	ret = get_msg_buffer(&buffer, &buffer_max_len,
 		&read_start, &read_end, file_path, file_path_len);
-	if (ret)
+	if (ret != 0)
 		return ret;
 
 	/* exception handling, store trustedcore exception info to file */
 	ret = open_msg_file(&filep, file_path, file_path_len);
-	if (ret)
+	if (ret != 0)
+		goto free_res;
+
+	ret = tlogger_chown(file_path, file_path_len);
+	if (ret != 0)
 		goto free_res;
 
 	ret = write_version_to_msg(filep, &pos);
-	if (ret)
+	if (ret != 0)
 		goto free_res;
 
 	ret = write_log_to_msg(filep, buffer, buffer_max_len,
@@ -1031,12 +1151,17 @@ int register_mem_to_teeos(uint64_t mem_addr, uint32_t mem_len, bool is_cache_mem
 	 */
 	mb_pack->operation.params[2].value.a = is_cache_mem;
 
-	smc_cmd.operation_phys = virt_to_phys(&mb_pack->operation);
+	smc_cmd.operation_phys = mailbox_virt_to_phys((uintptr_t)&mb_pack->operation);
 	smc_cmd.operation_h_phys =
-		(uint64_t)virt_to_phys(&mb_pack->operation) >> ADDR_TRANS_NUM;
-	ret = tc_ns_smc(&smc_cmd);
+		(uint64_t)mailbox_virt_to_phys((uintptr_t)&mb_pack->operation) >> ADDR_TRANS_NUM;
+
+	if (is_tee_rebooting())
+		ret = send_smc_cmd_rebooting(TSP_REQUEST, 0, 0, &smc_cmd);
+	else
+		ret = tc_ns_smc(&smc_cmd);
+
 	mailbox_free(mb_pack);
-	if (ret)
+	if (ret != 0)
 		tloge("Send log mem info failed\n");
 
 	return ret;
@@ -1046,11 +1171,11 @@ static int register_mem_cfg(uint64_t *addr, uint32_t *len)
 {
 	int ret;
 	ret = register_log_mem(addr, len);
-	if (ret)
+	if (ret != 0)
 		tloge("register log mem failed %x\n", ret);
 
 	ret = register_log_exception();
-	if (ret)
+	if (ret != 0)
 		tloge("teeos register exception to log module failed\n");
 
 	return ret;
@@ -1062,7 +1187,6 @@ static int check_log_mem(uint64_t mem_addr, uint32_t mem_len)
 		tloge("log mem init error, too small len:0x%x\n", mem_len);
 		return -1;
 	}
-
 	if (!mem_addr) {
 		tloge("mem init failed!!! addr is 0\n");
 		return -1;
@@ -1070,17 +1194,17 @@ static int check_log_mem(uint64_t mem_addr, uint32_t mem_len)
 	return 0;
 }
 
-static __init int register_tloger(void)
+int register_tloger_mem(void)
 {
 	int ret;
 	uint64_t mem_addr = 0;
 
 	ret = register_mem_cfg(&mem_addr, &g_log_mem_len);
-	if (ret)
+	if (ret != 0)
 		return ret;
 
 	ret = check_log_mem(mem_addr, g_log_mem_len);
-	if (ret)
+	if (ret != 0)
 		return ret;
 
 	g_log_buffer =
@@ -1090,14 +1214,34 @@ static __init int register_tloger(void)
 
 	g_log_buffer->flag.max_len = g_log_mem_len - sizeof(*g_log_buffer);
 
-	tloge("tlogcat verison 1.0.0\n");
+	return ret;
+}
+
+static int register_tloger_device(void)
+{
+	int ret;
+
+	tlogi("tlogcat version 1.0.0\n");
 	ret = register_device(LOGGER_LOG_TEEOS, (uintptr_t)g_log_buffer,
 		sizeof(*g_log_buffer) + g_log_buffer->flag.max_len);
-	if (ret) {
+	if (ret != 0) {
 		unmap_log_mem((int *)g_log_buffer);
 		g_log_buffer = NULL;
 		g_log_mem_len = 0;
 	}
+
+	return ret;
+}
+
+static int register_tloger(void)
+{
+	int ret;
+
+	ret = register_tloger_mem();
+	if (ret != 0)
+		return ret;
+
+	ret = register_tloger_device();
 
 	return ret;
 }
@@ -1129,12 +1273,12 @@ static void unregister_tlogger(void)
 }
 
 #ifdef CONFIG_TZDRIVER_MODULE
-__init int init_tlogger_service(void)
+int init_tlogger_service(void)
 {
 	return register_tloger();
 }
 
-void exit_tlogger_service(void)
+void free_tlogger_service(void)
 {
 	unregister_tlogger();
 }
@@ -1144,7 +1288,7 @@ static int __init init_tlogger_service(void)
 	return register_tloger();
 }
 
-static void __exit exit_tlogger_service(void)
+static void __exit free_tlogger_service(void)
 {
 	unregister_tlogger();
 }
@@ -1152,7 +1296,7 @@ static void __exit exit_tlogger_service(void)
 
 #ifdef CONFIG_TZDRIVER
 device_initcall(init_tlogger_service);
-module_exit(exit_tlogger_service);
+module_exit(free_tlogger_service);
 
 MODULE_AUTHOR("iTrustee");
 MODULE_DESCRIPTION("TrustCore Logger");

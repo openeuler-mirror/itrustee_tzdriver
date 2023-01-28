@@ -19,10 +19,19 @@
 #define TC_CLIENT_DRIVER_H
 
 #include <linux/list.h>
+#include <linux/cdev.h>
 #include "teek_ns_client.h"
 
+struct dev_node {
+	struct class *driver_class;
+	struct cdev char_dev;
+	dev_t devt;
+	struct device *class_dev;
+	const struct file_operations *fops;
+	char *node_name;
+};
+
 struct tc_ns_dev_list *get_dev_list(void);
-uint32_t tc_ns_get_uid(void);
 struct tc_ns_dev_file *tc_find_dev_file(unsigned int dev_file_id);
 int tc_ns_client_open(struct tc_ns_dev_file **dev_file, uint8_t kernel_api);
 int tc_ns_client_close(struct tc_ns_dev_file *dev);
