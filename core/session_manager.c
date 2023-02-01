@@ -42,6 +42,7 @@
 #include <linux/sched/task.h>
 #endif
 #include <linux/completion.h>
+#include <securec.h>
 #include "smc_smp.h"
 #include "mem.h"
 #include "gp_ops.h"
@@ -50,8 +51,8 @@
 #include "client_hash_auth.h"
 #include "mailbox_mempool.h"
 #include "tc_client_driver.h"
-#include "tee_trace_event.h"
-#include "tz_kthread_affinity.h"
+#include "internal_functions.h"
+#include "ko_adapt.h"
 
 static DEFINE_MUTEX(g_load_app_lock);
 #define MAX_REF_COUNT (255)
@@ -59,16 +60,6 @@ static DEFINE_MUTEX(g_load_app_lock);
 /* record all service node and need mutex to avoid race */
 struct list_head g_service_list;
 DEFINE_MUTEX(g_service_list_lock);
-
-struct load_img_params {
-	struct tc_ns_dev_file *dev_file;
-	const char *file_buffer;
-	unsigned int file_size;
-	struct mb_cmd_pack *mb_pack;
-	char *mb_load_mem;
-	struct tc_uuid *uuid_return;
-	unsigned int mb_load_size;
-};
 
 void init_srvc_list(void)
 {
@@ -88,7 +79,7 @@ void put_session_struct(struct tc_ns_session *session)
 	if (!session || !atomic_dec_and_test(&session->usage))
 		return;
 
-	if (memset_s(session, sizeof(*session), 0, sizeof(*session)))
+	if (memset_s(session, sizeof(*session), 0, sizeof(*session)) != 0)
 		tloge("Caution, memset failed!\n");
 	kfree(session);
 }
@@ -137,6 +128,20 @@ static int add_service_to_dev(struct tc_ns_dev_file *dev,
 	return -EFAULT;
 }
 
+static void tz_srv_sess_dump(const char *param)
+{
+	struct tc_ns_smc_cmd smc_cmd = { {0}, 0 };
+
+	(void)param;
+	smc_cmd.cmd_id = GLOBAL_CMD_ID_DUMP_SRV_SESS;
+	smc_cmd.cmd_type = CMD_TYPE_GLOBAL;
+
+	livepatch_down_read_sem();
+	if (tc_ns_smc(&smc_cmd))
+		tloge("send dump service session failed\n");
+	livepatch_up_read_sem();
+}
+
 void dump_services_status(const char *param)
 {
 	struct tc_ns_service *service = NULL;
@@ -149,6 +154,8 @@ void dump_services_status(const char *param)
 			atomic_read(&service->usage));
 	}
 	mutex_unlock(&g_service_list_lock);
+
+	tz_srv_sess_dump(param);
 }
 
 static void del_service_from_dev(struct tc_ns_dev_file *dev,
@@ -165,7 +172,7 @@ static void del_service_from_dev(struct tc_ns_dev_file *dev,
 				break;
 			}
 			dev->service_ref[i]--;
-			if (!dev->service_ref[i]) {
+			if (dev->service_ref[i] == 0) {
 				tlogd("del service %u from %u\n",
 					i, dev->dev_file_id);
 				dev->services[i] = NULL;
@@ -178,7 +185,7 @@ static void del_service_from_dev(struct tc_ns_dev_file *dev,
 
 struct tc_ns_session *tc_find_session_withowner(
 	const struct list_head *session_list,
-	unsigned int session_id, struct tc_ns_dev_file *dev_file)
+	unsigned int session_id, const struct tc_ns_dev_file *dev_file)
 {
 	struct tc_ns_session *session = NULL;
 
@@ -205,7 +212,7 @@ struct tc_ns_service *tc_find_service_in_dev(const struct tc_ns_dev_file *dev,
 
 	for (i = 0; i < SERVICES_MAX_COUNT; i++) {
 		if (dev->services[i] != NULL &&
-			!memcmp(dev->services[i]->uuid, uuid, UUID_LEN))
+			memcmp(dev->services[i]->uuid, uuid, UUID_LEN) == 0)
 			return dev->services[i];
 	}
 	return NULL;
@@ -277,20 +284,20 @@ static int tc_ns_need_load_image(unsigned int file_id,
 	}
 	mb_pack->operation.paramtypes = TEEC_MEMREF_TEMP_INOUT;
 	mb_pack->operation.params[0].memref.buffer =
-		virt_to_phys(mb_param);
+		mailbox_virt_to_phys((uintptr_t)mb_param);
 	mb_pack->operation.buffer_h_addr[0] =
-		(uint64_t)virt_to_phys(mb_param) >> ADDR_TRANS_NUM;
+		(uint64_t)mailbox_virt_to_phys((uintptr_t)mb_param) >> ADDR_TRANS_NUM;
 	mb_pack->operation.params[0].memref.size = SZ_4K;
 	smc_cmd.cmd_id = GLOBAL_CMD_ID_NEED_LOAD_APP;
 	smc_cmd.cmd_type = CMD_TYPE_GLOBAL;
 	smc_cmd.dev_file_id = file_id;
 	smc_cmd.context_id = 0;
-	smc_cmd.operation_phys = virt_to_phys(&mb_pack->operation);
+	smc_cmd.operation_phys = mailbox_virt_to_phys((uintptr_t)&mb_pack->operation);
 	smc_cmd.operation_h_phys =
-		(uint64_t)virt_to_phys(&mb_pack->operation) >> ADDR_TRANS_NUM;
+		(uint64_t)mailbox_virt_to_phys((uintptr_t)&mb_pack->operation) >> ADDR_TRANS_NUM;
 
 	smc_ret = tc_ns_smc(&smc_cmd);
-	if (smc_ret) {
+	if (smc_ret != 0) {
 		tloge("smc call returns error ret 0x%x\n", smc_ret);
 		ret = -EFAULT;
 		goto clean;
@@ -306,45 +313,115 @@ clean:
 }
 
 int tc_ns_load_secfile(struct tc_ns_dev_file *dev_file,
-	const void __user *argp)
+	void __user *argp, bool is_from_client_node)
 {
 	int ret;
-	struct load_secfile_ioctl_struct ioctl_arg = { 0, {0}, 0, {NULL} };
+	struct load_secfile_ioctl_struct ioctl_arg = { {0}, {0}, {NULL} };
+	bool load = true;
+	void *file_addr = NULL;
 
 	if (!dev_file || !argp) {
 		tloge("Invalid params !\n");
 		return -EINVAL;
 	}
 
-	if (copy_from_user(&ioctl_arg, argp, sizeof(ioctl_arg))) {
+	if (copy_from_user(&ioctl_arg, argp, sizeof(ioctl_arg)) != 0) {
 		tloge("copy from user failed\n");
 		ret = -ENOMEM;
 		return ret;
 	}
 
-	mutex_lock(&g_load_app_lock);
-	if (ioctl_arg.secfile_type == LOAD_TA) {
-		ret = tc_ns_need_load_image(dev_file->dev_file_id, ioctl_arg.uuid,
-			(unsigned int)UUID_LEN);
-		if (ret == 1) /* 1 means we need to load image */
-			ret = tc_ns_load_image(dev_file, ioctl_arg.file_buffer,
-				ioctl_arg.file_size, NULL, ioctl_arg.secfile_type);
-	} else if (ioctl_arg.secfile_type == LOAD_LIB) {
-		ret = tc_ns_load_image(dev_file, ioctl_arg.file_buffer,
-			ioctl_arg.file_size, NULL, ioctl_arg.secfile_type);
-	} else if (ioctl_arg.secfile_type == LOAD_DYNAMIC_DRV || ioctl_arg.secfile_type == LOAD_SERVICE) {
-			ret = tc_ns_load_image(dev_file, ioctl_arg.file_buffer,
-				ioctl_arg.file_size, NULL, ioctl_arg.secfile_type);
-	} else {
-		tloge("invalid secfile type: %d!", ioctl_arg.secfile_type);
-		ret = -EINVAL;
+	if (ioctl_arg.sec_file_info.secfile_type >= LOAD_TYPE_MAX ||
+	    ioctl_arg.sec_file_info.secfile_type == LOAD_PATCH) {
+		tloge("invalid secfile type: %d!", ioctl_arg.sec_file_info.secfile_type);
+		return -EINVAL;
 	}
-	if (ret)
-		tloge("load TA secfile: %d failed, ret = %x",
-			ioctl_arg.secfile_type, ret);
+
+	mutex_lock(&g_load_app_lock);
+	if (is_from_client_node) {
+		if (ioctl_arg.sec_file_info.secfile_type != LOAD_TA &&
+			ioctl_arg.sec_file_info.secfile_type != LOAD_LIB) {
+			tloge("this node does not allow this type of file to be loaded\n");
+			mutex_unlock(&g_load_app_lock);
+			return -EINVAL;
+		}
+	}
+
+	if (ioctl_arg.sec_file_info.secfile_type == LOAD_TA) {
+		ret = tc_ns_need_load_image(dev_file->dev_file_id, ioctl_arg.uuid,
+						(unsigned int)UUID_LEN);
+		if (ret != 1) /* 1 means we need to load image */
+			load = false;
+	}
+
+	if (load) {
+		file_addr = (void *)(uintptr_t)(ioctl_arg.memref.file_addr |
+			(((uint64_t)ioctl_arg.memref.file_h_addr) << ADDR_TRANS_NUM));
+		ret = tc_ns_load_image(dev_file, file_addr, &ioctl_arg.sec_file_info, NULL);
+		if (ret != 0)
+			tloge("load TA secfile: %d failed, ret = 0x%x\n",
+				ioctl_arg.sec_file_info.secfile_type, ret);
+	}
 	mutex_unlock(&g_load_app_lock);
+	if (copy_to_user(argp, &ioctl_arg, sizeof(ioctl_arg)) != 0)
+		tloge("copy to user failed\n");
 	return ret;
 }
+
+static uint32_t tc_ns_get_uid(void)
+{
+	struct task_struct *task = NULL;
+	const struct cred *cred = NULL;
+	uint32_t uid;
+
+	rcu_read_lock();
+	task = get_current();
+	get_task_struct(task);
+	rcu_read_unlock();
+	cred = koadpt_get_task_cred(task);
+	if (!cred) {
+		tloge("failed to get uid of the task\n");
+		put_task_struct(task);
+		return (uint32_t)(-1);
+	}
+
+	uid = cred->uid.val;
+	put_cred(cred);
+	put_task_struct(task);
+	tlogd("current uid is %u\n", uid);
+	return uid;
+}
+
+#ifdef CONFIG_AUTH_SUPPORT_UNAME
+static int set_login_information_uname(struct tc_ns_dev_file *dev_file, uint32_t uid)
+{
+	char uname[MAX_NAME_LENGTH] = { 0 };
+	uint32_t username_len = 0;
+	int ret = tc_ns_get_uname(uid, uname, sizeof(uname), &username_len);
+	if (ret < 0 || username_len >= MAX_NAME_LENGTH) {
+		tloge("get user name filed\n");
+		return -EFAULT;
+	}
+	if (memcpy_s(dev_file->pub_key, MAX_PUBKEY_LEN, uname, username_len)) {
+		tloge("failed to copy username, pub key len=%u\n", dev_file->pub_key_len);
+		return -EFAULT;
+	}
+	/* use pub_key to store username info */
+	dev_file->pub_key_len = username_len;
+	return 0;
+}
+#else
+static int set_login_information_uid(struct tc_ns_dev_file *dev_file, uint32_t ca_uid)
+{
+	if (memcpy_s(dev_file->pub_key, MAX_PUBKEY_LEN, &ca_uid, sizeof(ca_uid)) != 0) {
+		tloge("failed to copy pubkey, pub key len=%u\n",
+				dev_file->pub_key_len);
+		return -EFAULT;
+	}
+	dev_file->pub_key_len = sizeof(ca_uid);
+	return 0;
+}
+#endif
 
 /*
  * Modify the client context so params id 2 and 3 contain temp pointers to the
@@ -354,48 +431,58 @@ int tc_ns_load_secfile(struct tc_ns_dev_file *dev_file,
 static int set_login_information(struct tc_ns_dev_file *dev_file,
 	struct tc_ns_client_context *context)
 {
+	uint64_t size_addr, buffer_addr;
 	/* The daemon has failed to get login information or not supplied */
-	if (!dev_file->pkg_name_len)
+	if (dev_file->pkg_name_len == 0)
 		return -EINVAL;
 	/*
 	 * The 3rd parameter buffer points to the pkg name buffer in the
 	 * device file pointer
 	 * get package name len and package name
 	 */
-	context->params[3].memref.size_addr =
-		(__u64)(uintptr_t)&dev_file->pkg_name_len;
-	context->params[3].memref.buffer =
-		(__u64)(uintptr_t)dev_file->pkg_name;
+	size_addr = (__u64)(uintptr_t)&dev_file->pkg_name_len;
+	buffer_addr = (__u64)(uintptr_t)dev_file->pkg_name;
+	context->params[3].memref.size_addr = (__u32)size_addr;
+	context->params[3].memref.size_h_addr = (__u32)(size_addr >> ADDR_TRANS_NUM);
+	context->params[3].memref.buffer = (__u32)buffer_addr;
+	context->params[3].memref.buffer_h_addr = (__u32)(buffer_addr >> ADDR_TRANS_NUM);
+
 	/* Set public key len and public key */
-	if (dev_file->pub_key_len) {
-		context->params[2].memref.size_addr =
-			(__u64)(uintptr_t)&dev_file->pub_key_len;
-		context->params[2].memref.buffer =
-			(__u64)(uintptr_t)dev_file->pub_key;
-	} else {
+	if (dev_file->pub_key_len == 0) {
 		/* If get public key failed, then get uid in kernel */
 		uint32_t ca_uid = tc_ns_get_uid();
 		if (ca_uid == (uint32_t)(-1)) {
 			tloge("failed to get uid of the task\n");
 			goto error;
 		}
-		dev_file->pub_key_len = sizeof(ca_uid);
-		context->params[2].memref.size_addr =
-			(__u64)(uintptr_t)&dev_file->pub_key_len;
-		if (memcpy_s(dev_file->pub_key, MAX_PUBKEY_LEN, &ca_uid,
-			dev_file->pub_key_len)) {
-			tloge("failed to copy pubkey, pub key len=%u\n",
-			      dev_file->pub_key_len);
+#ifdef CONFIG_AUTH_SUPPORT_UNAME
+		if (set_login_information_uname(dev_file, ca_uid) != 0)
 			goto error;
-		}
-		context->params[2].memref.buffer =
-			(__u64)(uintptr_t)dev_file->pub_key;
+#else
+		if (set_login_information_uid(dev_file, ca_uid) != 0)
+			goto error;
+#endif
+#ifdef CONFIG_AUTH_HASH
+		dev_file->pkg_name_len = strlen((unsigned char *)dev_file->pkg_name);
+#endif
 	}
+	size_addr = (__u64)(uintptr_t)&dev_file->pub_key_len;
+	buffer_addr = (__u64)(uintptr_t)dev_file->pub_key;
+	context->params[2].memref.size_addr = (__u32)size_addr;
+	context->params[2].memref.size_h_addr = (__u32)(size_addr >> ADDR_TRANS_NUM);
+	context->params[2].memref.buffer = (__u32)buffer_addr;
+	context->params[2].memref.buffer_h_addr = (__u32)(buffer_addr >> ADDR_TRANS_NUM);
 	/* Now we mark the 2 parameters as input temp buffers */
 	context->param_types = teec_param_types(
 		teec_param_type_get(context->param_types, 0),
 		teec_param_type_get(context->param_types, 1),
 		TEEC_MEMREF_TEMP_INPUT, TEEC_MEMREF_TEMP_INPUT);
+#ifdef CONFIG_AUTH_HASH
+	if(set_login_information_hash(dev_file) != 0) {
+		tloge("set login information hash failed\n");
+		goto error;
+	}
+#endif
 	return 0;
 error:
 	return -EFAULT;
@@ -409,8 +496,14 @@ static int check_login_method(struct tc_ns_dev_file *dev_file,
 	if (!dev_file || !context || !flags)
 		return -EFAULT;
 
+	if (is_tee_rebooting()) {
+		context->returns.code = TEE_ERROR_IS_DEAD;
+		/* when ret > 0, use context return code */
+		return EFAULT;
+	}
+
 	if (context->login.method != TEEC_LOGIN_IDENTIFY) {
-		tlogd("login method is not supported\n");
+		tloge("login method is not supported\n");
 		return -EINVAL;
 	}
 
@@ -422,7 +515,7 @@ static int check_login_method(struct tc_ns_dev_file *dev_file,
 		return -EINVAL;
 
 	ret = set_login_information(dev_file, context);
-	if (ret) {
+	if (ret != 0) {
 		tloge("set login information failed ret =%d\n", ret);
 		return ret;
 	}
@@ -441,7 +534,7 @@ static struct tc_ns_service *tc_ref_service_in_dev(struct tc_ns_dev_file *dev,
 
 	for (i = 0; i < SERVICES_MAX_COUNT; i++) {
 		if (dev->services[i] != NULL &&
-			!memcmp(dev->services[i]->uuid, uuid, UUID_LEN)) {
+			memcmp(dev->services[i]->uuid, uuid, UUID_LEN) == 0) {
 			if (dev->service_ref[i] == MAX_REF_COUNT) {
 				*is_full = true;
 				return NULL;
@@ -469,7 +562,7 @@ static int tc_ns_service_init(const unsigned char *uuid, uint32_t uuid_len,
 		return ret;
 	}
 
-	if (memcpy_s(service->uuid, sizeof(service->uuid), uuid, uuid_len)) {
+	if (memcpy_s(service->uuid, sizeof(service->uuid), uuid, uuid_len) != 0) {
 		kfree(service);
 		return -EFAULT;
 	}
@@ -477,7 +570,7 @@ static int tc_ns_service_init(const unsigned char *uuid, uint32_t uuid_len,
 	INIT_LIST_HEAD(&service->session_list);
 	mutex_init(&service->session_lock);
 	list_add_tail(&service->head, &g_service_list);
-	tlogd("add service: 0x%x to service list\n", *(uint32_t *)uuid);
+	tlogd("add service: 0x%x to service list\n", *(const uint32_t *)uuid);
 	atomic_set(&service->usage, 1);
 	mutex_init(&service->operation_lock);
 	*new_service = service;
@@ -494,7 +587,7 @@ static struct tc_ns_service *tc_find_service_from_all(
 		return NULL;
 
 	list_for_each_entry(service, &g_service_list, head) {
-		if (!memcmp(service->uuid, uuid, sizeof(service->uuid)))
+		if (memcmp(service->uuid, uuid, sizeof(service->uuid)) == 0)
 			return service;
 	}
 
@@ -535,7 +628,7 @@ static struct tc_ns_service *find_service(struct tc_ns_dev_file *dev_file,
 	ret = tc_ns_service_init(context->uuid, UUID_LEN, &service);
 	/* unlock after init to make sure find service from all is correct */
 	mutex_unlock(&g_service_list_lock);
-	if (ret) {
+	if (ret != 0) {
 		tloge("service init failed");
 		mutex_unlock(&dev_file->service_lock);
 		return NULL;
@@ -543,7 +636,7 @@ static struct tc_ns_service *find_service(struct tc_ns_dev_file *dev_file,
 add_service:
 	ret = add_service_to_dev(dev_file, service);
 	mutex_unlock(&dev_file->service_lock);
-	if (ret) {
+	if (ret != 0) {
 		/*
 		 * for new srvc, match init usage to 1;
 		 * for srvc already exist, match get;
@@ -558,7 +651,7 @@ add_service:
 
 static bool is_valid_ta_size(const char *file_buffer, unsigned int file_size)
 {
-	if (!file_buffer || !file_size) {
+	if (!file_buffer || file_size == 0) {
 		tloge("invalid load ta size\n");
 		return false;
 	}
@@ -614,30 +707,30 @@ static void pack_load_frame_cmd(uint32_t load_size,
 	struct tc_uuid *uuid_return = params->uuid_return;
 
 	mb_pack->operation.params[0].memref.buffer =
-		virt_to_phys(mb_load_mem);
+		mailbox_virt_to_phys((uintptr_t)mb_load_mem);
 	mb_pack->operation.buffer_h_addr[0] =
-		(uint64_t)virt_to_phys(mb_load_mem) >> ADDR_TRANS_NUM;
+		(uint64_t)mailbox_virt_to_phys((uintptr_t)mb_load_mem) >> ADDR_TRANS_NUM;
 	mb_pack->operation.params[0].memref.size = load_size + sizeof(int);
 	mb_pack->operation.params[2].memref.buffer =
-		virt_to_phys(uuid_return);
+		mailbox_virt_to_phys((uintptr_t)uuid_return);
 	mb_pack->operation.buffer_h_addr[2] =
-		(uint64_t)virt_to_phys(uuid_return) >> ADDR_TRANS_NUM;
+		(uint64_t)mailbox_virt_to_phys((uintptr_t)uuid_return) >> ADDR_TRANS_NUM;
 	mb_pack->operation.params[2].memref.size = sizeof(*uuid_return);
 	mb_pack->operation.paramtypes = teec_param_types(TEEC_MEMREF_TEMP_INPUT,
-		TEEC_VALUE_INOUT, TEEC_MEMREF_TEMP_OUTPUT, TEEC_VALUE_INPUT);
+		TEEC_VALUE_INOUT, TEEC_MEMREF_TEMP_OUTPUT, TEEC_VALUE_INOUT);
 
 	smc_cmd->cmd_type = CMD_TYPE_GLOBAL;
 	smc_cmd->cmd_id = GLOBAL_CMD_ID_LOAD_SECURE_APP;
 	smc_cmd->context_id = 0;
-	smc_cmd->operation_phys = virt_to_phys(&mb_pack->operation);
+	smc_cmd->operation_phys = mailbox_virt_to_phys((uintptr_t)&mb_pack->operation);
 	smc_cmd->operation_h_phys =
-		(uint64_t)virt_to_phys(&mb_pack->operation) >> ADDR_TRANS_NUM;
+		(uint64_t)mailbox_virt_to_phys((uintptr_t)&mb_pack->operation) >> ADDR_TRANS_NUM;
 }
 
 static int32_t load_image_copy_file(struct load_img_params *params, uint32_t load_size,
 	int32_t load_flag, uint32_t loaded_size)
 {
-	if (!current->mm) {
+	if (params->dev_file->kernel_api == TEE_REQ_FROM_KERNEL_MODE) {
 		if (memcpy_s(params->mb_load_mem + sizeof(load_flag),
 			params->mb_load_size - sizeof(load_flag),
 			params->file_buffer + loaded_size, load_size) != 0) {
@@ -647,15 +740,15 @@ static int32_t load_image_copy_file(struct load_img_params *params, uint32_t loa
 		return 0;
 	}
 	if (copy_from_user(params->mb_load_mem + sizeof(load_flag),
-		(void __user *)params->file_buffer + loaded_size, load_size)) {
+		(const void __user *)params->file_buffer + loaded_size, load_size)) {
 		tloge("file buf get fail\n");
 		return  -EFAULT;
 	}
 	return 0;
 }
 
-static int load_image_by_frame(struct load_img_params *params,
-	unsigned int load_times, struct tc_ns_client_return *tee_ret, enum secfile_type_t type)
+static int load_image_by_frame(struct load_img_params *params, unsigned int load_times,
+	struct tc_ns_client_return *tee_ret, struct sec_file_info *sec_file_info)
 {
 	char *p = params->mb_load_mem;
 	uint32_t load_size;
@@ -685,20 +778,24 @@ static int load_image_by_frame(struct load_img_params *params,
 
 		pack_load_frame_cmd(load_size, params, &smc_cmd);
 		params->mb_pack->operation.params[3].value.a = index;
-		params->mb_pack->operation.params[1].value.a = (type == LOAD_DYNAMIC_DRV ? 1 : 0);
+		params->mb_pack->operation.params[1].value.a = sec_file_info->secfile_type;
 		smc_cmd.dev_file_id = params->dev_file->dev_file_id;
 		smc_ret = tc_ns_smc(&smc_cmd);
 		tlogd("configid=%u, ret=%d, load_flag=%d, index=%u\n",
 			params->mb_pack->operation.params[1].value.a, smc_ret,
 			load_flag, index);
 
-		if (smc_ret) {
+		if (smc_ret != 0) {
 			if (tee_ret != NULL) {
 				tee_ret->code = smc_ret;
 				tee_ret->origin = smc_cmd.err_origin;
 			}
+			sec_file_info->sec_load_err = (int32_t)params->mb_pack->operation.params[3].value.b;
 			return -EFAULT;
 		}
+
+		if (!smc_ret && !load_flag && load_image_for_ion(params, tee_ret ? &tee_ret->origin : NULL))
+				return -EPERM;
 
 		loaded_size += load_size;
 	}
@@ -709,63 +806,101 @@ int tc_ns_load_image_with_lock(struct tc_ns_dev_file *dev, const char *file_buff
 	unsigned int file_size, enum secfile_type_t type)
 {
 	int ret;
+	struct sec_file_info sec_file = {0, 0, 0};
 
 	if (!dev || !file_buffer) {
 		tloge("dev or file buffer is NULL!\n");
 		return -EINVAL;
 	}
 
+	sec_file.secfile_type = type;
+	sec_file.file_size = file_size;
+
 	mutex_lock(&g_load_app_lock);
-	ret = tc_ns_load_image(dev, file_buffer, file_size, NULL, type);
+	ret = tc_ns_load_image(dev, file_buffer, &sec_file, NULL);
 	mutex_unlock(&g_load_app_lock);
 
 	return ret;
 }
 
-int tc_ns_load_image(struct tc_ns_dev_file *dev, const char *file_buffer,
-	unsigned int file_size, struct tc_ns_client_return *tee_ret, enum secfile_type_t type)
+static void free_load_image_buffer(struct load_img_params *params)
+{
+	mailbox_free(params->mb_load_mem);
+	mailbox_free(params->mb_pack);
+	mailbox_free(params->uuid_return);
+}
+
+int load_image(struct load_img_params *params,
+	struct sec_file_info *sec_file_info, struct tc_ns_client_return *tee_ret)
 {
 	int ret;
 	unsigned int load_times;
-	struct load_img_params params = {
-		dev, file_buffer, file_size, NULL, NULL, NULL, 0
-	};
+	unsigned int file_size;
 
-	if (!dev || !file_buffer) {
-		tloge("dev or file buffer is NULL!\n");
+	/* tee_ret can be null */
+	if (params == NULL || sec_file_info == NULL)
+		return -1;
+
+	file_size = params->file_size;
+
+	params->mb_load_size = (file_size > (SZ_1M - sizeof(int))) ?
+		SZ_1M : ALIGN(file_size, SZ_4K);
+
+	ret = alloc_for_load_image(params);
+	if (ret != 0) {
+		tloge("Alloc load image buf fail!\n");
+		return ret;
+	}
+
+	if (params->mb_load_size <= sizeof(int)) {
+		tloge("mb load size is too small!\n");
+		free_load_image_buffer(params);
+		return -ENOMEM;
+	}
+
+	load_times = file_size / (params->mb_load_size - sizeof(int));
+	if ((file_size % (params->mb_load_size - sizeof(int))) != 0)
+		load_times += 1;
+
+	ret = load_image_by_frame(params, load_times, tee_ret, sec_file_info);
+	if (ret != 0) {
+		tloge("load image by frame fail!\n");
+		free_load_image_buffer(params);
+		return ret;
+	}
+
+	free_load_image_buffer(params);
+	return 0;
+}
+
+int tc_ns_load_image(struct tc_ns_dev_file *dev, const char *file_buffer,
+	struct sec_file_info *sec_file_info, struct tc_ns_client_return *tee_ret)
+{
+	unsigned int file_size;
+	struct load_img_params params = { dev, file_buffer, 0, NULL, NULL, NULL, 0 };
+
+	if (!dev || !file_buffer || !sec_file_info) {
+		tloge("dev or file buffer or sec_file_info is NULL!\n");
 		return -EINVAL;
 	}
+
+	file_size = sec_file_info->file_size;
+	params.file_size = file_size;
 
 	if (!is_valid_ta_size(file_buffer, file_size))
 		return -EINVAL;
 
-	params.mb_load_size = (file_size > (SZ_1M - sizeof(int))) ?
-		SZ_1M : ALIGN(file_size, SZ_4K);
-	ret = alloc_for_load_image(&params);
-	if (ret)
-		return ret;
-
-	if (params.mb_load_size <= sizeof(int)) {
-		tloge("mb load size is too small!\n");
-		ret = -ENOMEM;
-		goto free_mem;
-	}
-	load_times = file_size / (params.mb_load_size - sizeof(int));
-	if (file_size % (params.mb_load_size - sizeof(int)))
-		load_times += 1;
-	ret = load_image_by_frame(&params, load_times, tee_ret, type);
-free_mem:
-	mailbox_free(params.mb_load_mem);
-	mailbox_free(params.mb_pack);
-	mailbox_free(params.uuid_return);
-	return ret;
+	return load_image(&params, sec_file_info, tee_ret);
 }
 
 static int load_ta_image(struct tc_ns_dev_file *dev_file,
 	struct tc_ns_client_context *context)
 {
 	int ret;
+	struct sec_file_info sec_file = {0, 0, 0};
 	struct tc_ns_client_return tee_ret = {0};
+	void *file_addr = NULL;
+
 	tee_ret.origin = TEEC_ORIGIN_COMMS;
 
 	mutex_lock(&g_load_app_lock);
@@ -777,9 +912,12 @@ static int load_ta_image(struct tc_ns_dev_file *dev_file,
 			mutex_unlock(&g_load_app_lock);
 			return -1;
 		}
-		ret = tc_ns_load_image(dev_file, context->file_buffer,
-			context->file_size, &tee_ret, LOAD_TA);
-		if (ret) {
+		file_addr = (void *)(uintptr_t)(context->memref.file_addr |
+			(((uint64_t)context->memref.file_h_addr) << ADDR_TRANS_NUM));
+		sec_file.secfile_type = LOAD_TA;
+		sec_file.file_size = context->file_size;
+		ret = tc_ns_load_image(dev_file, file_addr, &sec_file, &tee_ret);
+		if (ret != 0) {
 			tloge("load image failed, ret=%x", ret);
 			context->returns.code = tee_ret.code;
 			if (tee_ret.origin != TEEC_ORIGIN_COMMS) {
@@ -791,6 +929,7 @@ static int load_ta_image(struct tc_ns_dev_file *dev_file,
 		}
 	}
 	mutex_unlock(&g_load_app_lock);
+
 	return ret;
 }
 
@@ -822,15 +961,16 @@ static int proc_open_session(struct tc_ns_dev_file *dev_file,
 
 	mutex_lock(&service->operation_lock);
 	ret = load_ta_image(dev_file, context);
-	if (ret) {
+	if (ret != 0) {
 		tloge("load ta image failed\n");
 		mutex_unlock(&service->operation_lock);
 		return ret;
 	}
 
 	ret = tc_client_call(&params);
-	if (ret) {
+	if (ret != 0) {
 		/* Clean this session secure information */
+		kill_ion_by_uuid((struct tc_uuid *)context->uuid);
 		mutex_unlock(&service->operation_lock);
 		tloge("smc call returns error, ret=0x%x\n", ret);
 		return ret;
@@ -848,9 +988,13 @@ static int proc_open_session(struct tc_ns_dev_file *dev_file,
 static void clear_context_param(struct tc_ns_client_context *context)
 {
 	context->params[2].memref.size_addr = 0;
+	context->params[2].memref.size_h_addr = 0;
 	context->params[2].memref.buffer = 0;
+	context->params[2].memref.buffer_h_addr = 0;
 	context->params[3].memref.size_addr = 0;
+	context->params[3].memref.size_h_addr = 0;
 	context->params[3].memref.buffer = 0;
+	context->params[3].memref.buffer_h_addr = 0;
 }
 
 int tc_ns_open_session(struct tc_ns_dev_file *dev_file,
@@ -867,7 +1011,7 @@ int tc_ns_open_session(struct tc_ns_dev_file *dev_file,
 	}
 
 	ret = check_login_method(dev_file, context, &flags);
-	if (ret)
+	if (ret != 0)
 		goto err_clear_param;
 
 	context->cmd_id = GLOBAL_CMD_ID_OPEN_SESSION;
@@ -891,15 +1035,14 @@ int tc_ns_open_session(struct tc_ns_dev_file *dev_file,
 	mutex_init(&session->ta_session_lock);
 
 	ret = calc_client_auth_hash(dev_file, context, session);
-	if (ret) {
+	if (ret != 0) {
 		tloge("calc client auth hash failed\n");
 		goto err_free_rsrc;
 	}
 
 	ret = proc_open_session(dev_file, context, service, session, flags);
-	if (!ret)
+	if (ret == 0)
 		goto err_clear_param;
-
 err_free_rsrc:
 	mutex_lock(&dev_file->service_lock);
 	del_service_from_dev(dev_file, service);
@@ -912,7 +1055,7 @@ err_clear_param:
 }
 
 static struct tc_ns_session *get_session(struct tc_ns_service *service,
-	struct tc_ns_dev_file *dev_file,
+	const struct tc_ns_dev_file *dev_file,
 	const struct tc_ns_client_context *context)
 {
 	struct tc_ns_session *session = NULL;
@@ -952,19 +1095,20 @@ static int close_session(struct tc_ns_dev_file *dev,
 	if (uuid_len != UUID_LEN)
 		return -EINVAL;
 
-	if (memset_s(&context, sizeof(context), 0, sizeof(context)))
+	if (memset_s(&context, sizeof(context), 0, sizeof(context)) != 0)
 		return -EFAULT;
 
-	if (memcpy_s(context.uuid, sizeof(context.uuid), uuid, uuid_len))
+	if (memcpy_s(context.uuid, sizeof(context.uuid), uuid, uuid_len) != 0)
 		return -EFAULT;
 
 	context.session_id = session_id;
 	context.cmd_id = GLOBAL_CMD_ID_CLOSE_SESSION;
 	params.flags = TC_CALL_GLOBAL | TC_CALL_SYNC;
 	ret = tc_client_call(&params);
-	if (ret)
+	if (ret != 0)
 		tloge("close session failed, ret=0x%x\n", ret);
 
+	kill_ion_by_uuid((struct tc_uuid *)context.uuid);
 	return ret;
 }
 
@@ -981,14 +1125,13 @@ static void close_session_in_service_list(struct tc_ns_dev_file *dev,
 			continue;
 		ret = close_session(dev, session, service->uuid,
 			(unsigned int)UUID_LEN, session->session_id);
-		if (ret)
+		if (ret != 0)
 			tloge("close session smc failed when close fd!\n");
-		
 		mutex_lock(&service->session_lock);
 		list_del(&session->head);
 		mutex_unlock(&service->session_lock);
 
-		put_session_struct(session); /* pair with find session */
+		put_session_struct(session); /* pair with open session */
 	}
 }
 
@@ -998,7 +1141,7 @@ static bool if_exist_unclosed_session(struct tc_ns_dev_file *dev)
 
 	for (index = 0; index < SERVICES_MAX_COUNT; index++) {
 		if (dev->services[index] != NULL &&
-			!list_empty(&dev->services[index]->session_list))
+			list_empty(&dev->services[index]->session_list) == 0)
 			return true;
 	}
 	return false;
@@ -1013,7 +1156,7 @@ static int close_session_thread_fn(void *arg)
 	/* close unclosed session */
 	for (index = 0; index < SERVICES_MAX_COUNT; index++) {
 		if (dev->services[index] != NULL &&
-				!list_empty(&dev->services[index]->session_list)) {
+				list_empty(&dev->services[index]->session_list) == 0) {
 				service = dev->services[index];
 
 				mutex_lock(&service->operation_lock);
@@ -1041,6 +1184,10 @@ void close_unclosed_session_in_kthread(struct tc_ns_dev_file *dev)
 	if (!if_exist_unclosed_session(dev))
 		return;
 
+	/* when self recovery, release session in reboot interface */
+	if (is_tee_rebooting())
+		return;
+
 	close_thread = kthread_create(close_session_thread_fn,
 		dev, "close_fn_%6d", dev->dev_file_id);
 	if (unlikely(IS_ERR_OR_NULL(close_thread))) {
@@ -1055,7 +1202,7 @@ void close_unclosed_session_in_kthread(struct tc_ns_dev_file *dev)
 }
 
 int tc_ns_close_session(struct tc_ns_dev_file *dev_file,
-	const struct tc_ns_client_context *context)
+	struct tc_ns_client_context *context)
 {
 	int ret = -EINVAL;
 	struct tc_ns_service *service = NULL;
@@ -1065,6 +1212,12 @@ int tc_ns_close_session(struct tc_ns_dev_file *dev_file,
 		tloge("invalid dev_file or context\n");
 		return ret;
 	}
+
+	if (is_tee_rebooting()) {
+		context->returns.code = TEE_ERROR_IS_DEAD;
+		return TEE_ERROR_IS_DEAD;
+	}
+
 	service = get_service(dev_file, context);
 	if (!service) {
 		tloge("invalid service\n");
@@ -1083,9 +1236,8 @@ int tc_ns_close_session(struct tc_ns_dev_file *dev_file,
 		ret2 = close_session(dev_file, session, context->uuid,
 			(unsigned int)UUID_LEN, context->session_id);
 		mutex_unlock(&session->ta_session_lock);
-		if (ret2)
+		if (ret2 != 0)
 			tloge("close session smc failed!\n");
-
 		mutex_lock(&service->session_lock);
 		list_del(&session->head);
 		mutex_unlock(&service->session_lock);
@@ -1120,6 +1272,11 @@ int tc_ns_send_cmd(struct tc_ns_dev_file *dev_file,
 		return ret;
 	}
 
+	if (is_tee_rebooting()) {
+		context->returns.code = TEE_ERROR_IS_DEAD;
+		return EFAULT;
+	}
+
 	service = get_service(dev_file, context);
 	if (service) {
 		session = get_session(service, dev_file, context);
@@ -1141,7 +1298,7 @@ find_session:
 	ret = tc_client_call(&params);
 	mutex_unlock(&session->ta_session_lock);
 	put_session_struct(session);
-	if (ret)
+	if (ret != 0)
 		tloge("smc call returns error, ret=0x%x\n", ret);
 	return ret;
 }
@@ -1152,10 +1309,10 @@ static int ioctl_session_send_cmd(struct tc_ns_dev_file *dev_file,
 	int ret;
 
 	ret = tc_ns_send_cmd(dev_file, context);
-	if (ret)
+	if (ret != 0)
 		tloge("send cmd failed ret is %d\n", ret);
-	if (copy_to_user(argp, context, sizeof(*context))) {
-		if (!ret)
+	if (copy_to_user(argp, context, sizeof(*context)) != 0) {
+		if (ret == 0)
 			ret = -EFAULT;
 	}
 	return ret;
@@ -1175,19 +1332,18 @@ int tc_client_session_ioctl(struct file *file, unsigned int cmd,
 	}
 
 	dev_file = file->private_data;
-	if (copy_from_user(&context, argp, sizeof(context))) {
+	if (copy_from_user(&context, argp, sizeof(context)) != 0) {
 		tloge("copy from user failed\n");
 		return -EFAULT;
 	}
 
 	context.returns.origin = TEEC_ORIGIN_COMMS;
-	freezer_do_not_count();
 	switch (cmd) {
 	case TC_NS_CLIENT_IOCTL_SES_OPEN_REQ:
 		ret = tc_ns_open_session(dev_file, &context);
-		if (ret)
+		if (ret != 0)
 			tloge("open session failed ret is %d\n", ret);
-		if (copy_to_user(argp, &context, sizeof(context)) && !ret)
+		if (copy_to_user(argp, &context, sizeof(context)) != 0 && ret == 0)
 			ret = -EFAULT;
 		break;
 	case TC_NS_CLIENT_IOCTL_SES_CLOSE_REQ:
@@ -1203,7 +1359,6 @@ int tc_client_session_ioctl(struct file *file, unsigned int cmd,
 		tloge("invalid cmd:0x%x!\n", cmd);
 		return ret;
 	}
-	freezer_count();
 	/*
 	 * Don't leak ERESTARTSYS to user space.
 	 *
@@ -1229,4 +1384,60 @@ int tc_client_session_ioctl(struct file *file, unsigned int cmd,
 			return restart_syscall();
 	}
 	return ret;
+}
+
+static void cleanup_session(struct tc_ns_service *service)
+{
+	struct tc_ns_session *session = NULL;
+	struct tc_ns_session *session_tmp = NULL;
+
+	if (!service)
+		return;
+
+	/* close unclosed session */
+	if (list_empty(&service->session_list) == 0) {
+		mutex_lock(&service->operation_lock);
+		list_for_each_entry_safe(session, session_tmp, &service->session_list, head) {
+			tlogd("clean up session %u\n", session->session_id);
+			mutex_lock(&service->session_lock);
+			list_del(&session->head);
+			mutex_unlock(&service->session_lock);
+			put_session_struct(session);
+		}
+		mutex_unlock(&service->operation_lock);
+	}
+	put_service_struct(service);
+
+	return;
+}
+
+void free_all_session(void)
+{
+	struct tc_ns_dev_file *dev_file = NULL;
+	struct tc_ns_dev_file *dev_file_tmp = NULL;
+	struct tc_ns_dev_list *dev_list = NULL;
+	int i;
+
+	dev_list = get_dev_list();
+	if (!dev_list) {
+		tloge("cleanup session, dev list is null\n");
+		return;
+	}
+	mutex_lock(&dev_list->dev_lock);
+	list_for_each_entry_safe(dev_file, dev_file_tmp, &dev_list->dev_file_list, head) {
+		mutex_lock(&dev_file->service_lock);
+		for (i = 0; i < SERVICES_MAX_COUNT; i++) {
+			if (dev_file->services[i] == NULL)
+				continue;
+			get_service_struct(dev_file->services[i]);
+			/* avoid dead lock in close session */
+			mutex_unlock(&dev_file->service_lock);
+			cleanup_session(dev_file->services[i]);
+			mutex_lock(&dev_file->service_lock);
+			dev_file->services[i] = NULL;
+		}
+		mutex_unlock(&dev_file->service_lock);
+	}
+	mutex_unlock(&dev_list->dev_lock);
+	return;
 }

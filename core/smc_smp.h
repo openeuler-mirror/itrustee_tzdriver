@@ -71,7 +71,7 @@ struct pending_entry {
 #ifdef BIT_MASK
 #undef BIT_MASK
 #endif
-#define BIT_MASK(nr)                    (1UL << (((uint64_t)nr) % sizeof(uint64_t)))
+#define BIT_MASK(nr)                    (1UL << (((uint64_t)(nr)) % sizeof(uint64_t)))
 
 #ifdef BIT_WORD
 #undef BIT_WORD
@@ -84,7 +84,7 @@ struct pending_entry {
 #define DECLARE_BITMAP(name, bits)      uint64_t name[BITS_TO_LONGS(bits)]
 
 #define SIQ_DUMP_TIMEOUT 1U
-#define SIQ_DUMP_SHELL 2U
+#define SIQ_DUMP_SHELL   2U
 
 typedef uint32_t smc_buf_lock_t;
 
@@ -106,7 +106,7 @@ struct tc_ns_smc_queue {
 
 bool sigkill_pending(struct task_struct *tsk);
 int smc_context_init(const struct device *class_dev);
-void smc_free_data(void);
+void free_smc_data(void);
 int tc_ns_smc(struct tc_ns_smc_cmd *cmd);
 int tc_ns_smc_with_no_nr(struct tc_ns_smc_cmd *cmd);
 int teeos_log_exception_archive(unsigned int eventid, const char *exceptioninfo);
@@ -122,5 +122,13 @@ void foreach_pending_entry(void (*func)(struct pending_entry *));
 void put_pending_entry(struct pending_entry *pe);
 void show_cmd_bitmap(void);
 void wakeup_tc_siq(uint32_t siq_mode);
+void smc_set_cmd_buffer(void);
+unsigned long raw_smc_send(uint32_t cmd, phys_addr_t cmd_addr, uint32_t cmd_type, uint8_t wait);
+void occupy_clean_cmd_buf(void);
+void clr_system_crash_flag(void);
+void svc_thread_release(void);
+int send_smc_cmd_rebooting(uint32_t cmd_id, phys_addr_t cmd_addr, uint32_t cmd_type,
+			   const struct tc_ns_smc_cmd *in_cmd);
+void send_smc_reset_cmd_buffer(void);
 
 #endif

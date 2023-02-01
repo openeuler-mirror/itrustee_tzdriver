@@ -33,13 +33,13 @@
 #include "agent.h"
 #include "tc_ns_log.h"
 #include "mailbox_mempool.h"
+#include "internal_functions.h"
 #include "reserved_mempool.h"
 
 void tc_mem_free(struct tc_ns_shared_mem *shared_mem)
 {
 	if (!shared_mem)
 		return;
-	
 	if (shared_mem->mem_type == RESERVED_TYPE) {
 		reserved_mem_free(shared_mem->kernel_addr);
 		kfree(shared_mem);
@@ -56,12 +56,11 @@ void tc_mem_free(struct tc_ns_shared_mem *shared_mem)
 static void init_shared_mem(struct tc_ns_shared_mem *sh, void *addr, size_t len)
 {
 	sh->kernel_addr = addr;
-	sh->len = len;
+	sh->len = (uint32_t)len;
 	sh->user_addr = INVALID_MAP_ADDR;
 	sh->user_addr_ca = INVALID_MAP_ADDR;
 	atomic_set(&sh->usage, 0);
 }
-
 struct tc_ns_shared_mem *tc_mem_allocate(size_t len)
 {
 	struct tc_ns_shared_mem *shared_mem = NULL;
@@ -75,8 +74,9 @@ struct tc_ns_shared_mem *tc_mem_allocate(size_t len)
 	shared_mem->mem_type = VMALLOC_TYPE;
 	len = ALIGN(len, SZ_4K);
 	if (exist_res_mem()) {
-		if (len > RESEVED_MAX_ALLOC_SIZE || len > RESERVED_MEM_POOL_SIZE) {
+		if (len > get_res_mem_slice_size()) {
 			tloge("allocate reserved mem size too large\n");
+			kfree(shared_mem);
 			return ERR_PTR(-EINVAL);
 		}
 		addr = reserved_mem_alloc(len);
@@ -88,8 +88,6 @@ struct tc_ns_shared_mem *tc_mem_allocate(size_t len)
 			tlogw("no more reserved memory to alloc so we use system vmalloc.\n");
 		}
 	}
-
-
 	if (len > MAILBOX_POOL_SIZE) {
 		tloge("alloc sharemem size %zu is too large\n", len);
 		kfree(shared_mem);
@@ -97,10 +95,11 @@ struct tc_ns_shared_mem *tc_mem_allocate(size_t len)
 	}
 	addr = vmalloc_user(len);
 	if (!addr) {
-		tloge("alloc maibox failed\n");
+		tloge("alloc mailbox failed\n");
 		kfree(shared_mem);
 		return ERR_PTR(-ENOMEM);
 	}
+
 	init_shared_mem(shared_mem, addr, len);
 	return shared_mem;
 }

@@ -20,8 +20,11 @@
 
 #include <linux/kernel.h>
 #include <linux/types.h>
+#include "teek_ns_client.h"
 
+#ifndef MAILBOX_POOL_SIZE
 #define MAILBOX_POOL_SIZE SZ_4M
+#endif
 
 /* alloc options */
 #define MB_FLAG_ZERO 0x1 /* set 0 after alloc page */
@@ -30,8 +33,10 @@
 void *mailbox_alloc(size_t size, unsigned int flag);
 void mailbox_free(const void *ptr);
 int mailbox_mempool_init(void);
-void mailbox_mempool_destroy(void);
+void free_mailbox_mempool(void);
 struct mb_cmd_pack *mailbox_alloc_cmd_pack(void);
 void *mailbox_copy_alloc(const void *src, size_t size);
+int re_register_mailbox(void);
+uintptr_t mailbox_virt_to_phys(uintptr_t addr);
 
 #endif

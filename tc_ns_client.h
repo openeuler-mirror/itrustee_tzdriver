@@ -38,9 +38,9 @@
 #endif
 
 #if (KERNEL_VERSION(5, 10, 0) <= LINUX_VERSION_CODE)
-#define mm_sem_lock(mm) mm->mmap_lock
+#define mm_sem_lock(mm) (mm)->mmap_lock
 #else
-#define mm_sem_lock(mm) mm->mmap_sem
+#define mm_sem_lock(mm) (mm)->mmap_sem
 #endif
 
 struct tc_ns_client_login {
@@ -50,18 +50,19 @@ struct tc_ns_client_login {
 
 union tc_ns_client_param {
 	struct {
-		__u64 buffer;
-		__u64 offset;
-		__u64 size_addr;
+		__u32 buffer;
+		__u32 buffer_h_addr;
+		__u32 offset;
+		__u32 h_offset;
+		__u32 size_addr;
+		__u32 size_h_addr;
 	} memref;
 	struct {
-		__u64 a_addr;
-		__u64 b_addr;
+		__u32 a_addr;
+		__u32 a_h_addr;
+		__u32 b_addr;
+		__u32 b_h_addr;
 	} value;
-	struct {
-		__u64 buffer;
-		__u64 size_addr;
-	}sharedmem;
 };
 
 struct tc_ns_client_return {
@@ -82,7 +83,10 @@ struct tc_ns_client_context {
 	unsigned int file_size;
 	union {
 		char *file_buffer;
-		unsigned long long file_addr;
+		struct {
+			uint32_t file_addr;
+			uint32_t file_h_addr;
+		} memref;
 	};
 };
 
@@ -96,17 +100,27 @@ enum secfile_type_t {
 	LOAD_SERVICE,
 	LOAD_LIB,
 	LOAD_DYNAMIC_DRV,
+	LOAD_PATCH,
+	LOAD_TYPE_MAX,
+};
+
+struct sec_file_info {
+	enum secfile_type_t secfile_type;
+	uint32_t file_size;
+	int32_t sec_load_err;
 };
 
 struct load_secfile_ioctl_struct {
-	enum secfile_type_t secfile_type;
+	struct sec_file_info sec_file_info;
 	unsigned char uuid[UUID_LEN];
-	uint32_t file_size;
 	union {
 		char *file_buffer;
-		unsigned long long file_addr;
+		struct {
+			uint32_t file_addr;
+			uint32_t file_h_addr;
+		} memref;
 	};
-};
+}__attribute__((packed));
 
 struct agent_ioctl_args {
 	uint32_t id;
@@ -120,7 +134,10 @@ struct agent_ioctl_args {
 struct tc_ns_client_crl {
 	union {
 		uint8_t *buffer;
-		unsigned long long addr;
+		struct {
+			uint32_t buffer_addr;
+			uint32_t buffer_h_addr;
+		} memref;
 	};
 	uint32_t size;
 };

@@ -21,57 +21,48 @@
 
 #include <linux/types.h>
 #include <linux/smp.h>
+#include "teek_client_constants.h"
 
-/* maxium trace event per cpu stream */
-#define TEE_TRACE_EVENT_NUM 20000
+/* maximum trace event per cpu stream */
+#define TEE_TRACE_EVENT_NUM		20000
 /* maxium trace task of 'sched_in/out' event */
-#define TEE_TRACE_TASK_MAX 8
+#define TEE_TRACE_TASK_MAX		8
+#define MAX_UINT64_TIME			(uint64_t)(~((uint64_t)0))
 
-/* Add event id's name in 'view_state[]' in same order */
-enum tee_event_id {
-    INVOKE_CMD_START,
-    INVOKE_CMD_END,
-    SMC_SEND,
-    SMC_DONE,
-    SMC_IN,
-    SMC_OUT,
-    SMC_SLEEP,
-    SMC_PREEMPT,
-    GTASK_GET_CMD,
-    GTASK_PUT_CMD,
-    GTASK_REQ_TA,
-    GTASK_RESP_TA,
-    SPI_WAKEUP,
-    SCHED_IN,
-    SCHED_OUT,
-    TEE_EVENT_MAX
-};
+#define TRACE_LOG_LOOP_ENABLED	1
+#define TRACE_LOG_LOOP_DISABLED	0
 
 #ifdef CONFIG_TEE_TRACE
 void tee_trace_add_event(enum tee_event_id id, uint64_t add_info);
 
 int tee_trace_event_enable(void);
 int tee_trace_event_start(void);
+int tee_trace_event_start_loop_record(void);
 int tee_trace_event_stop(void);
 
 struct tee_trace_view_t {
-    uint64_t start;
-    uint32_t total;
-    uint32_t end[NR_CPUS];
-    uint32_t at[NR_CPUS];
+	uint64_t start;
+	uint32_t total;
+	uint32_t freq;
+	uint32_t buffer_is_full;
+	uint32_t end[NR_CPUS];
+	uint32_t at[NR_CPUS];
+};
+
+struct trace_log_info {
+	const char *event_name;
+	uint32_t event_id;
+	uint32_t ca_pid;
+	uint32_t cpu;
+	uint64_t time;
+	uint64_t add_info;
 };
 
 void get_tee_trace_start(struct tee_trace_view_t *view);
-int get_tee_trace_next(struct tee_trace_view_t *view, uint32_t *event_id,
-    const char **event_name, uint32_t *cpu, uint32_t *ca_pid,
-        uint64_t *time, uint64_t *add_info);
+int get_tee_trace_next(struct tee_trace_view_t *view, struct trace_log_info *log_info,
+	bool cyclically);
 const char *get_tee_trace_task_name(uint32_t task_idx);
-#else
-static inline void tee_trace_add_event(enum tee_event_id id, uint64_t add_info)
-{
-    (void)id;
-    (void)add_info;
-}
+void free_event_mem(void);
 #endif
 
 #endif

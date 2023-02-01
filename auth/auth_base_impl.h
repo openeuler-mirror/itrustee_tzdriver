@@ -18,6 +18,10 @@
 #ifndef AUTH_BASE_IMPL_H
 #define AUTH_BASE_IMPL_H
 
+#ifndef TEECD_PATH_UID_AUTH_CTX
+#define TEECD_PATH_UID_AUTH_CTX ""
+#endif
+
 #if ((defined CONFIG_CLIENT_AUTH) || (defined CONFIG_TEECD_AUTH))
 #include <linux/version.h>
 #if (KERNEL_VERSION(4, 14, 0) <= LINUX_VERSION_CODE)
@@ -36,6 +40,7 @@
 #define BUF_MAX_SIZE           1024
 #define MAX_PATH_SIZE          512
 #define SHA256_DIGEST_LENTH    32
+#define MAX_SCTX_LEN           128
 
 struct sdesc {
 	struct shash_desc shash;
@@ -47,16 +52,16 @@ int calc_task_hash(unsigned char *digest, uint32_t dig_len,
 	struct task_struct *cur_struct, uint32_t pub_key_len);
 
 int tee_init_shash_handle(char *hash_type);
-void tee_exit_shash_handle(void);
+void free_shash_handle(void);
 struct crypto_shash *get_shash_handle(void);
 
 void init_crypto_hash_lock(void);
 void mutex_crypto_hash_lock(void);
 void mutex_crypto_hash_unlock(void);
-
+int check_teecd_auth(void);
 #else
 
-static inline void tee_exit_shash_handle(void)
+static inline void free_shash_handle(void)
 {
 	return;
 }
@@ -64,6 +69,11 @@ static inline void tee_exit_shash_handle(void)
 static void init_crypto_hash_lock(void)
 {
 	return;
+}
+
+int check_teecd_auth(void)
+{
+	return 0;
 }
 
 #endif /* CLIENT_AUTH || TEECD_AUTH */

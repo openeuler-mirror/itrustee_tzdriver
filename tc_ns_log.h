@@ -37,32 +37,32 @@ enum {
 #define tlogv(fmt, args...) \
 do { \
 	if (TZ_DEBUG_VERBOSE >= TEE_LOG_MASK) \
-		pr_info("([%s] %i, %s)%s: " fmt, MOD_TEE, current->pid, current->comm, __func__, ## args); \
+		pr_info("[%s] (%i, %s)%s: " fmt, MOD_TEE, current->pid, current->comm, __func__, ## args); \
 } while (0)
 
 
 #define tlogd(fmt, args...) \
 do { \
 	if (TZ_DEBUG_DEBUG >= TEE_LOG_MASK) \
-		pr_info("([%s] %i, %s)%s: " fmt, MOD_TEE, current->pid, current->comm, __func__, ## args); \
+		pr_info("[%s] (%i, %s)%s: " fmt, MOD_TEE, current->pid, current->comm, __func__, ## args); \
 } while (0)
 
 
 #define tlogi(fmt, args...) \
 do { \
 	if (TZ_DEBUG_INFO >= TEE_LOG_MASK) \
-		pr_info("([%s] %i, %s)%s: " fmt, MOD_TEE, current->pid, current->comm, __func__, ## args); \
+		pr_info("[%s] (%i, %s)%s: " fmt, MOD_TEE, current->pid, current->comm, __func__, ## args); \
 } while (0)
 
 
 #define tlogw(fmt, args...) \
 do { \
 	if (TZ_DEBUG_WARN >= TEE_LOG_MASK) \
-		pr_warn("([%s] %i, %s)%s: " fmt, MOD_TEE, current->pid, current->comm, __func__, ## args); \
+		pr_warn("[%s] (%i, %s)%s: " fmt, MOD_TEE, current->pid, current->comm, __func__, ## args); \
 } while (0)
 
 
 #define tloge(fmt, args...) \
-		pr_err("([%s] %i, %s)%s: " fmt, MOD_TEE, current->pid, current->comm, __func__, ## args)
+		pr_err("[%s] (%i, %s)%s: " fmt, MOD_TEE, current->pid, current->comm, __func__, ## args)
 
 #endif

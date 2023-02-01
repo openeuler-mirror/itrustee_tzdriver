@@ -31,6 +31,7 @@
 #define TEE_FACE_AGENT2_ID  0x46616345 /* face agent id */
 #define TEE_VLTMM_AGENT_ID  0x564c544d /* vltmm agent id */
 #define SYSTEM_UID          1000
+#define MS_TO_NS            1000000
 
 enum agent_state_type {
 	AGENT_CRASHED = 0,
@@ -101,10 +102,10 @@ static inline void put_agent_event(struct smc_event_data *event_data)
 	}
 }
 
-int is_allowed_agent_ca(const struct ca_info *ca, bool check_agent_id);
-bool is_third_party_agent(unsigned int agent_id);
+int is_allowed_agent_ca(const struct ca_info *ca,
+	bool check_agent_id);
 void agent_init(void);
-void agent_exit(void);
+void free_agent(void);
 struct smc_event_data *find_event_control(unsigned int agent_id);
 void send_event_response(unsigned int agent_id);
 int agent_process_work(const struct tc_ns_smc_cmd *smc_cmd, unsigned int agent_id);
@@ -118,12 +119,13 @@ void send_crashed_event_response_all(const struct tc_ns_dev_file *dev_file);
 int tc_ns_wait_event(unsigned int agent_id);
 int tc_ns_send_event_response(unsigned int agent_id);
 void send_event_response_single(const struct tc_ns_dev_file *dev_file);
-int tc_ns_sync_sys_time(const struct tc_ns_client_time *tc_ns_time);
+int sync_system_time_from_user(const struct tc_ns_client_time *user_time);
+void sync_system_time_from_kernel(void);
 int tee_agent_clear_work(struct tc_ns_client_context *context,
 	unsigned int dev_file_id);
 int tee_agent_kernel_register(struct tee_agent_kernel_ops *new_agent);
 bool is_system_agent(const struct tc_ns_dev_file *dev_file);
 void tee_agent_clear_dev_owner(const struct tc_ns_dev_file *dev_file);
 char *get_proc_dpath(char *path, int path_len);
-
+int check_ext_agent_access(uint32_t agent_id);
 #endif

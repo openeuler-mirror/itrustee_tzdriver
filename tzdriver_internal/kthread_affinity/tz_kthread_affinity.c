@@ -67,7 +67,7 @@ void tz_workqueue_bind_mask(struct workqueue_struct *wq, uint32_t flag)
 	cpumask_copy(attrs->cpumask, &g_kthread_cpumask);
 
 	ret = apply_workqueue_attrs(wq, attrs);
-	if (ret)
+	if (ret != 0)
 		tloge("apply workqueue attrs failed %d\n", ret);
 	koadpt_free_workqueue_attrs(attrs);
 }

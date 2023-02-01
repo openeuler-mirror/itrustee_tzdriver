@@ -20,7 +20,18 @@
 
 #include <linux/types.h>
 
-#define UINT64_MAX (uint64_t)(~((uint64_t)0))
+#define OPEN_FILE_MODE          0640U
+#define ROOT_UID                0
+#define ROOT_GID                0
+#define SYSTEM_GID              1000
+#ifdef LAST_TEE_MSG_ROOT_GID
+#define FILE_CHOWN_GID                0
+#else
+/* system gid for last_teemsg file sys chown */
+#define FILE_CHOWN_GID                1000
+#endif
+
+#define UINT64_MAX (uint64_t)(~((uint64_t)0)) /* 0xFFFFFFFFFFFFFFFF */
 
 #ifdef CONFIG_TEELOG
 void tz_log_write(void);
@@ -29,7 +40,8 @@ int register_mem_to_teeos(uint64_t mem_addr, uint32_t mem_len, bool is_cache_mem
 
 #ifdef CONFIG_TZDRIVER_MODULE
 int init_tlogger_service(void);
-void exit_tlogger_service(void);
+void free_tlogger_service(void);
+int register_tloger_mem(void);
 #endif
 
 #else
@@ -55,7 +67,7 @@ static inline int init_tlogger_service(void)
 {
 	return 0;
 }
-static inline int exit_tlogger_service(void)
+static inline void free_tlogger_service(void)
 {
 }
 #endif

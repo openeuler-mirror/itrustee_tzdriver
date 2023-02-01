@@ -31,9 +31,7 @@
 
 typedef const struct cred *(get_task_cred_func)(struct task_struct *);
 typedef void (kthread_bind_mask_func)(struct task_struct *, const struct cpumask *);
-
 typedef struct page *(alloc_pages_func)(gfp_t gfp_mask, unsigned int order);
-
 typedef struct workqueue_attrs *(alloc_workqueue_attrs_func)(gfp_t gfp_mask);
 typedef void (free_workqueue_attrs_func)(struct workqueue_attrs *attrs);
 
@@ -109,6 +107,7 @@ struct workqueue_attrs *koadpt_alloc_workqueue_attrs(gfp_t gfp_mask)
 {
 #if (LINUX_VERSION_CODE >= KERNEL_VERSION(5, 10, 0))
 	struct workqueue_attrs *attrs;
+	(void)gfp_mask;
 
 	attrs = kzalloc(sizeof(*attrs), GFP_KERNEL);
 	if (!attrs) {
@@ -116,7 +115,7 @@ struct workqueue_attrs *koadpt_alloc_workqueue_attrs(gfp_t gfp_mask)
 		return NULL;
 	}
 
-	if (alloc_cpumask_var(&attrs->cpumask, GFP_KERNEL) != 0) {
+	if (alloc_cpumask_var(&attrs->cpumask, GFP_KERNEL) == false) {
 		tloge("alloc cpumask var fail\n");
 		kfree(attrs);
 		return NULL;
@@ -143,9 +142,9 @@ struct workqueue_attrs *koadpt_alloc_workqueue_attrs(gfp_t gfp_mask)
 void koadpt_free_workqueue_attrs(struct workqueue_attrs *attrs)
 {
 #if (LINUX_VERSION_CODE >= KERNEL_VERSION(5, 10, 0))
-	if (!attrs)
+	if(!attrs)
 		return;
-	
+
 	free_cpumask_var(attrs->cpumask);
 	kfree(attrs);
 #else

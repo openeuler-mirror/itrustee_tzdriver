@@ -20,21 +20,6 @@
 #include "tc_ns_client.h"
 #include "teek_ns_client.h"
 
-struct tc_call_params {
-	struct tc_ns_dev_file *dev;
-	struct tc_ns_client_context *context;
-	struct tc_ns_session *sess;
-	uint8_t flags;
-};
-
-struct tc_op_params {
-	struct mb_cmd_pack *mb_pack;
-	struct tc_ns_smc_cmd *smc_cmd;
-	struct tc_ns_temp_buf local_tmpbuf[TEE_PARAM_NUM];
-	uint32_t trans_paramtype[TEE_PARAM_NUM];
-	bool op_inited;
-};
-
 struct pagelist_info {
 	uint64_t page_num;
 	uint64_t page_size;
@@ -52,6 +37,5 @@ int tc_client_call(const struct tc_call_params *call_params);
 bool is_tmp_mem(uint32_t param_type);
 bool is_ref_mem(uint32_t param_type);
 bool is_val_param(uint32_t param_type);
-bool is_ion_param(uint32_t param_type);
 
 #endif

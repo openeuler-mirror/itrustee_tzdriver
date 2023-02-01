@@ -32,10 +32,12 @@
 #include <securec.h>
 #include "tc_ns_log.h"
 #include "tlogger.h"
+#include "shared_mem.h"
 
 void unregister_log_exception(void)
 {
 }
+
 int register_log_exception(void)
 {
 	return 0;
@@ -48,21 +50,21 @@ struct pages_module_result {
 
 struct pages_module_result g_mem_info = {0};
 
-#ifdef CONFIG_512K_LOG_PAGES_MEM
-#define PAGES_LOG_MEM_LEN   (512 * SZ_1K) /* mem size: 512 k */
-#else
-#define PAGES_LOG_MEM_LEN   (256 * SZ_1K) /* mem size: 256 k */
-#endif
-
 static int tee_pages_register_core(void)
 {
-	g_mem_info.log_addr = (uintptr_t)__get_free_pages(
-		GFP_KERNEL | __GFP_ZERO, get_order(PAGES_LOG_MEM_LEN));
+	if (g_mem_info.log_addr != 0 || g_mem_info.log_len != 0) {
+		if (memset_s((void *)g_mem_info.log_addr,  g_mem_info.log_len, 0,  g_mem_info.log_len) != 0) {
+			tloge("clean log memory failed\n");
+			return -EFAULT;
+		}
+		return 0;
+	}
+
+	g_mem_info.log_addr = get_log_mem_vaddr();
 	if (IS_ERR_OR_NULL((void *)(uintptr_t)g_mem_info.log_addr)) {
 		tloge("get log mem error\n");
 		return -1;
 	}
-
 	g_mem_info.log_len = PAGES_LOG_MEM_LEN;
 	return 0;
 }
@@ -80,14 +82,14 @@ int register_log_mem(uint64_t *addr, uint32_t *len)
 	}
 
 	ret = tee_pages_register_core();
-	if (ret)
+	if (ret != 0)
 		return ret;
 
-	mem_addr = virt_to_phys((void *)(uintptr_t)g_mem_info.log_addr);
+	mem_addr = get_log_mem_paddr(g_mem_info.log_addr);
 	mem_len = g_mem_info.log_len;
 
 	ret = register_mem_to_teeos(mem_addr, mem_len, true);
-	if (ret)
+	if (ret != 0)
 		return ret;
 
 	*addr = g_mem_info.log_addr;
@@ -119,7 +121,16 @@ int *map_log_mem(uint64_t mem_addr, uint32_t mem_len)
 
 void unmap_log_mem(int *log_buffer)
 {
-	free_pages((unsigned long)(uintptr_t)log_buffer,
-		get_order(PAGES_LOG_MEM_LEN));
+	free_log_mem((uint64_t)(uintptr_t)log_buffer);
 }
 
+void get_log_chown(uid_t *user, gid_t *group)
+{
+	if (!user || !group) {
+		tloge("user or group buffer is null\n");
+		return;
+	}
+
+	*user = ROOT_UID;
+	*group = FILE_CHOWN_GID;
+}

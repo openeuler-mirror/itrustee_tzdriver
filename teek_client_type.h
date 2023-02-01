@@ -47,7 +47,7 @@ struct teec_session {
 
 struct teec_sharedmemory {
 	void *buffer;
-	size_t size;
+	uint32_t size;
 	uint32_t flags;
 	uint32_t ops_cnt;
 	bool is_allocated;
@@ -57,13 +57,13 @@ struct teec_sharedmemory {
 
 struct teec_tempmemory_reference {
 	void *buffer;
-	size_t size;
+	uint32_t size;
 };
 
 struct teec_registeredmemory_reference {
 	struct teec_sharedmemory *parent;
-	size_t size;
-	size_t offset;
+	uint32_t size;
+	uint32_t offset;
 };
 
 
@@ -74,7 +74,7 @@ struct teec_value {
 
 struct teec_ion_reference {
 	int ion_share_fd;
-	size_t ion_size;
+	uint32_t ion_size;
 };
 
 union teec_parameter {
@@ -94,79 +94,23 @@ struct teec_operation {
 
 typedef uint32_t TEEC_Result;
 
-typedef struct {
-	uint32_t timeLow;
-	uint16_t timeMid;
-	uint16_t timeHiAndVersion;
-	uint8_t clockSeqAndNode[8];
-} TEEC_UUID;
+typedef struct teec_uuid TEEC_UUID;
 
-typedef struct {
-	void *dev;
-	uint8_t *ta_path;
-	struct list_head session_list;
-	struct list_head shrd_mem_list;
-} TEEC_Context;
+typedef struct teec_context TEEC_Context;
 
-typedef struct {
-	uint32_t session_id;
-	TEEC_UUID service_id;
-	uint32_t ops_cnt;
-	struct list_head head;
-	TEEC_Context *context;
-} TEEC_Session;
+typedef struct teec_session TEEC_Session;
 
-typedef struct {
-	void *buffer;
-	size_t size;
-	uint32_t flags;
-	uint32_t ops_cnt;
-	bool is_allocated;
-	struct list_head head;
-	TEEC_Context *context;
-} TEEC_SharedMemory;
+typedef struct teec_sharedmemory TEEC_SharedMemory;
 
-typedef struct {
-	void *buffer;
-	size_t size;
-} TEEC_TempMemoryReference;
+typedef struct teec_tempmemory_reference TEEC_TempMemoryReference;
 
-typedef struct {
-	TEEC_SharedMemory *parent;
-	size_t size;
-	size_t offset;
-} TEEC_RegisteredMemoryReference;
+typedef struct teec_registeredmemory_reference TEEC_RegisteredMemoryReference;
 
-typedef struct {
-	uint32_t a;
-	uint32_t b;
-} TEEC_Value;
+typedef struct teec_value TEEC_Value;
 
-typedef struct {
-	int ion_share_fd;
-	size_t ion_size;
-} TEEC_IonReference;
+typedef struct teec_ion_reference TEEC_IonReference;
 
-typedef union {
-	TEEC_TempMemoryReference tmpref;
-	TEEC_RegisteredMemoryReference memref;
-	TEEC_Value value;
-	TEEC_IonReference ionref;
-} TEEC_Parameter;
-
-typedef struct {
-	uint32_t event_type;
-	/* Tui event type */
-	uint32_t value;
-	/* return value, is keycode if tui event is getKeycode */
-	uint32_t notch;   /* notch size of phone */
-	uint32_t width;   /* width of foldable screen */
-	uint32_t height;  /* height of foldable screen */
-	uint32_t fold_state;    /* state of foldable screen */
-	uint32_t display_state; /* one state of folded state */
-	uint32_t phy_width;     /* real width of the mobile */
-	uint32_t phy_height;    /* real height of the mobile */
-} TEEC_TUI_Parameter;
+typedef union teec_parameter TEEC_Parameter;
 
 typedef struct {
 	uint32_t started;
