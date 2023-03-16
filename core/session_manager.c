@@ -32,7 +32,6 @@
 #include <linux/vmalloc.h>
 #include <linux/pid.h>
 #include <linux/cred.h>
-#include <linux/freezer.h>
 #include <linux/thread_info.h>
 #include <linux/highmem.h>
 #include <linux/mm.h>
@@ -1355,7 +1354,6 @@ int tc_client_session_ioctl(struct file *file, unsigned int cmd,
 		tee_trace_add_event(INVOKE_CMD_END, 0);
 		break;
 	default:
-		freezer_count();
 		tloge("invalid cmd:0x%x!\n", cmd);
 		return ret;
 	}

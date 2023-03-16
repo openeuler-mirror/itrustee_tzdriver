@@ -38,6 +38,7 @@ set(CMAKE_EXTRA_FLAGS "${CMAKE_EXTRA_FLAGS} -DCONFIG_AUTH_SUPPORT_UNAME -DCONFIG
 set(CMAKE_EXTRA_FLAGS "${CMAKE_EXTRA_FLAGS} -I${PROJECT_SOURCE_DIR}/libboundscheck/include/ -I${PROJECT_SOURCE_DIR} -I${PROJECT_SOURCE_DIR}/auth -I${PROJECT_SOURCE_DIR}/core")
 set(CMAKE_EXTRA_FLAGS "${CMAKE_EXTRA_FLAGS} -I${PROJECT_SOURCE_DIR}/tlogger -I${PROJECT_SOURCE_DIR}/tzdriver_internal/kthread_affinity -I${PROJECT_SOURCE_DIR}/tzdriver_internal/include")
 set(CMAKE_EXTRA_FLAGS "${CMAKE_EXTRA_FLAGS} -I${PROJECT_SOURCE_DIR}/tzdriver_internal/tee_trace_event")
+set(CMAKE_EXTRA_FLAGS "${CMAKE_EXTRA_FLAGS} -isystem /usr/lib/gcc/aarch64-linux-gnu/10.3.1/include")
 
 # Compile .ko file
 add_custom_target(${TARGET_NAME} ALL COMMAND @echo "Compiling module ${TARGET_NAME}.ko...")
