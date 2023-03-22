@@ -119,7 +119,7 @@ char *get_proc_dpath(char *path, int path_len)
 		return NULL;
 	}
 
-	exe_file = get_mm_exe_file(mm);
+	exe_file = mm->exe_file;
 	if (!exe_file) {
 		mmput(mm);
 		return NULL;
@@ -129,7 +129,6 @@ char *get_proc_dpath(char *path, int path_len)
 	path_get(&base_path);
 	dpath = d_path(&base_path, path, MAX_PATH_SIZE);
 	path_put(&base_path);
-	fput(exe_file);
 	mmput(mm);
 
 	return dpath;

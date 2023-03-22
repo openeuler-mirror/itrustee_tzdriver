@@ -27,7 +27,6 @@
 #include <linux/sched.h>
 #include <asm/cacheflush.h>
 #include <linux/kthread.h>
-#include <linux/freezer.h>
 #include <linux/module.h>
 #include <linux/of.h>
 #include <linux/of_address.h>
@@ -739,15 +738,9 @@ static int tc_client_agent_ioctl(const struct file *file, unsigned int cmd,
 
 static void handle_cmd_prepare(unsigned int cmd)
 {
-	if (cmd == TC_NS_CLIENT_IOCTL_SES_OPEN_REQ ||
-		cmd == TC_NS_CLIENT_IOCTL_SES_CLOSE_REQ ||
-		cmd == TC_NS_CLIENT_IOCTL_SEND_CMD_REQ)
-		freezer_do_not_count();
-
 	if (cmd != TC_NS_CLIENT_IOCTL_WAIT_EVENT &&
 		cmd != TC_NS_CLIENT_IOCTL_SEND_EVENT_RESPONSE)
 		livepatch_down_read_sem();
-	return;
 }
 
 static void handle_cmd_finish(unsigned int cmd)
@@ -755,12 +748,6 @@ static void handle_cmd_finish(unsigned int cmd)
 	if (cmd != TC_NS_CLIENT_IOCTL_WAIT_EVENT &&
 		cmd != TC_NS_CLIENT_IOCTL_SEND_EVENT_RESPONSE)
 		livepatch_up_read_sem();
-
-	if (cmd == TC_NS_CLIENT_IOCTL_SES_OPEN_REQ ||
-		cmd == TC_NS_CLIENT_IOCTL_SES_CLOSE_REQ ||
-		cmd == TC_NS_CLIENT_IOCTL_SEND_CMD_REQ)
-		freezer_count();
-	return;
 }
 
 static long tc_private_ioctl(struct file *file, unsigned int cmd,

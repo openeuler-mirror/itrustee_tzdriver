@@ -126,7 +126,7 @@ unsigned long g_shadow_thread_id = 0;
 static struct task_struct *g_siq_thread;
 static struct task_struct *g_smc_svc_thread;
 static struct task_struct *g_ipi_helper_thread;
-static DEFINE_KTHREAD_WORKER(g_ipi_helper_worker);
+static struct kthread_worker g_ipi_helper_worker;
 
 enum cmd_reuse {
 	CLEAR,      /* clear this cmd index */
@@ -2068,6 +2068,7 @@ static int init_smc_related_rsrc(const struct device *class_dev)
 	koadpt_kthread_bind_mask(g_siq_thread, &new_mask);
 	/* some products specify the cpu that kthread need to bind */
 	tz_kthread_bind_mask(g_siq_thread);
+	kthread_init_worker(&g_ipi_helper_worker);
 	g_ipi_helper_thread = kthread_create(kthread_worker_fn,
 		&g_ipi_helper_worker, "ipihelper");
 	if (IS_ERR_OR_NULL(g_ipi_helper_thread)) {
