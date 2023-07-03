@@ -400,7 +400,7 @@ static void tc_notify_set_affinity(struct notify_data_entry *entry)
 		uint32_t i;
 
 		cpumask_clear(&mask);
-		for (i = 0; i < (uint32_t)NR_CPUS; i++) {
+		for_each_online_cpu(i) {
 			struct aff_bits_t *aff = &af_data->aff;
 			if (aff->aff_bits[i / AFF_BITS_SIZE] & aff_bits_mask(i))
 				cpumask_set_cpu(i, &mask);
@@ -581,17 +581,12 @@ int TC_NS_RegisterServiceCallbackFunc(const char *uuid, void *func,
 	const void *private_data)
 {
 	const char *uuid_in = uuid;
+
+	if (!get_tz_init_flag()) return EFAULT;
 	return tc_ns_register_service_call_back_func(uuid_in,
 		func, private_data);
 }
 EXPORT_SYMBOL(TC_NS_RegisterServiceCallbackFunc);
-
-int tc_ns_tst_cmd(void *argp)
-{
-	(void)argp;
-	tloge("usr img do not support this cmd\n");
-	return 0;
-}
 
 int send_notify_cmd(unsigned int cmd_id)
 {
@@ -619,7 +614,7 @@ int send_notify_cmd(unsigned int cmd_id)
 		(unsigned int)((uint64_t)mailbox_virt_to_phys((uintptr_t)&mb_pack->operation) >> ADDR_TRANS_NUM);
 
 	if (is_tee_rebooting())
-		ret = send_smc_cmd_rebooting(TSP_REQUEST, 0, 0, &smc_cmd);
+		ret = send_smc_cmd_rebooting(TSP_REQUEST, &smc_cmd);
 	else
 		ret = tc_ns_smc(&smc_cmd);
 

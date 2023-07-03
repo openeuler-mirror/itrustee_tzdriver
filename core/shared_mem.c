@@ -18,6 +18,7 @@
 #include <linux/of_address.h>
 #include <linux/of_device.h>
 #include <linux/of_platform.h>
+#include <linux/pagemap.h>
 #include <asm/io.h>
 #include "tc_ns_log.h"
 #include "tc_ns_client.h"
@@ -27,11 +28,102 @@
 #include "mailbox_mempool.h"
 #include "ko_adapt.h"
 
+uint64_t get_reserved_cmd_vaddr_of(phys_addr_t cmd_phys, uint64_t cmd_size)
+{
+	uint64_t cmd_vaddr;
+	if (cmd_phys == 0 || cmd_size == 0) {
+		tloge("cmd phy or cmd size is error\n");
+		return 0;
+	}
+	cmd_vaddr = (uint64_t)(uintptr_t)ioremap_cache(cmd_phys, cmd_size);
+	if (cmd_vaddr == 0) {
+		tloge("io remap for reserved cmd buffer failed\n");
+		return 0;
+	}
+	(void)memset_s((void *)(uintptr_t)cmd_vaddr, cmd_size, 0, cmd_size);
+	return cmd_vaddr;
+}
+
+#ifdef CONFIG_NOCOPY_SHAREDMEM
+int fill_shared_mem_info(uint64_t start_vaddr, uint32_t pages_no,
+	uint32_t offset, uint32_t buffer_size, uint64_t info_addr)
+{
+	struct pagelist_info *page_info = NULL;
+	struct page **pages = NULL;
+	uint64_t *phys_addr = NULL;
+	uint32_t page_num;
+	uint32_t i;
+
+	if (pages_no == 0)
+		return -EFAULT;
+
+	pages = (struct page **)vmalloc(pages_no * sizeof(uint64_t));
+	if (pages == NULL)
+		return -EFAULT;
+
+	down_read(&mm_sem_lock(current->mm));
+	page_num = get_user_pages((uintptr_t)start_vaddr, pages_no, FOLL_WRITE, pages, NULL);
+	up_read(&mm_sem_lock(current->mm));
+	if (page_num != pages_no) {
+		tloge("get page phy addr failed\n");
+		if (page_num > 0)
+			release_pages(pages, page_num);
+		vfree(pages);
+		return -EFAULT;
+	}
+
+	page_info = (struct pagelist_info *)(uintptr_t)info_addr;
+	page_info->page_num = pages_no;
+	page_info->page_size = PAGE_SIZE;
+	page_info->sharedmem_offset = offset;
+	page_info->sharedmem_size = buffer_size;
+
+	phys_addr = (uint64_t *)(uintptr_t)info_addr + (sizeof(*page_info) / sizeof(uint64_t));
+	for (i = 0; i < pages_no; i++) {
+		struct page *page = pages[i];
+		if (page == NULL) {
+			release_pages(pages, page_num);
+			vfree(pages);
+			return -EFAULT;
+		}
+		phys_addr[i] = (uintptr_t)page_to_phys(page);
+	}
+
+	vfree(pages);
+	return 0;
+}
+
+void release_shared_mem_page(uint64_t buf, uint32_t buf_size)
+{
+	uint32_t i;
+	uint64_t *phys_addr = NULL;
+	struct pagelist_info *page_info = NULL;
+	struct page *page = NULL;
+
+	page_info = (struct pagelist_info *)(uintptr_t)buf;
+	phys_addr = (uint64_t *)(uintptr_t)buf + (sizeof(*page_info) / sizeof(uint64_t));
+
+	if (buf_size != sizeof(*page_info) + sizeof(uint64_t) * page_info->page_num) {
+		tloge("bad size, cannot release page\n");
+		return;
+	}
+
+	for (i = 0; i < page_info->page_num; i++) {
+		page = (struct page *)(uintptr_t)phys_to_page(phys_addr[i]);
+		if (page == NULL)
+			continue;
+		set_bit(PG_dirty, &page->flags);
+		put_page(page);
+	}
+}
+#endif
+
 #ifdef CONFIG_SHARED_MEM_RESERVED
 
 #define CMD_MEM_MIN_SIZE 0x1000
 #define SPI_MEM_MIN_SIZE 0x1000
 #define OPERATION_MEM_MIN_SIZE 0x1000
+#define MAILBOX_BUF_MIN_SIZE 0x10
 uint64_t g_cmd_mem_paddr;
 uint64_t g_cmd_mem_size;
 uint64_t g_mailbox_paddr;
@@ -142,7 +234,7 @@ uintptr_t mailbox_page_address(mailbox_page_t *page)
 	if (!page)
 		return 0;
 
-	return (uintptr_t)*page;
+	return *page;
 }
 
 uintptr_t mailbox_virt_to_phys(uintptr_t addr)
@@ -171,12 +263,17 @@ void free_operation(uint64_t op_vaddr)
 	(void)op_vaddr;
 }
 
-/*
- * This function only for platform, CONFIG_LOG_POOL
- * marco controls the log retention of soft reset feature.
- * Enable COCNFIG_LOG_POOL macro, this function won't memset
- * log pool memory, and the old log before reset can be retention.
- */
+uint64_t get_mailbox_buffer_vaddr(uint32_t pool_count)
+{
+	(void)pool_count;
+	return g_shmem_start_virt + MAILBOX_POOL_SIZE + sizeof(struct tc_ns_operation);
+}
+
+void free_mailbox_buffer(uint64_t op_vaddr)
+{
+	(void)op_vaddr;
+}
+
 uint64_t get_log_mem_vaddr(void)
 {
 	uint64_t log_vaddr = (uint64_t)(uintptr_t)ioremap_cache(g_log_mem_paddr, g_log_mem_size);
@@ -209,13 +306,7 @@ void free_log_mem(uint64_t log_vaddr)
 
 uint64_t get_cmd_mem_vaddr(void)
 {
-	uint64_t cmd_vaddr = (uint64_t)(uintptr_t)ioremap_cache(g_cmd_mem_paddr, g_cmd_mem_size);
-	if (cmd_vaddr == 0) {
-		tloge("io remap for cmd buffer failed\n");
-		return 0;
-	}
-	(void)memset_s((void *)(uintptr_t)cmd_vaddr, g_cmd_mem_size, 0, g_cmd_mem_size);
-	return cmd_vaddr;
+	return get_reserved_cmd_vaddr_of(g_cmd_mem_paddr, g_cmd_mem_size);
 }
 
 uint64_t get_cmd_mem_paddr(uint64_t cmd_vaddr)
@@ -277,7 +368,7 @@ uintptr_t mailbox_page_address(mailbox_page_t *page)
 	if (!page)
 		return 0;
 
-	return (uintptr_t)page_address(page);
+	return page_address(page);
 }
 
 uintptr_t mailbox_virt_to_phys(uintptr_t addr)
@@ -285,7 +376,7 @@ uintptr_t mailbox_virt_to_phys(uintptr_t addr)
 	if (!addr)
 		return 0;
 
-	return virt_to_phys((void *)addr);
+	return virt_to_phys(addr);
 }
 
 mailbox_page_t *mailbox_virt_to_page(uint64_t ptr)
@@ -298,7 +389,7 @@ mailbox_page_t *mailbox_virt_to_page(uint64_t ptr)
 
 uint64_t get_operation_vaddr(void)
 {
-	return (uint64_t)kzalloc(sizeof(struct tc_ns_operation), GFP_KERNEL);
+	return kzalloc(sizeof(struct tc_ns_operation), GFP_KERNEL);
 }
 
 void free_operation(uint64_t op_vaddr)
@@ -306,7 +397,22 @@ void free_operation(uint64_t op_vaddr)
 	if (!op_vaddr)
 		return;
 
-	kfree((void *)op_vaddr);
+	kfree(op_vaddr);
+}
+
+uint64_t get_mailbox_buffer_vaddr(uint32_t pool_count)
+{
+	if (pool_count == 0)
+		return 0;
+	return kzalloc(sizeof(struct mailbox_buffer) * pool_count, GFP_KERNEL);
+}
+
+void free_mailbox_buffer(uint64_t op_vaddr)
+{
+	if (!op_vaddr)
+		return;
+
+	kfree(op_vaddr);
 }
 
 uint64_t get_log_mem_vaddr(void)

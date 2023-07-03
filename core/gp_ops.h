@@ -20,13 +20,6 @@
 #include "tc_ns_client.h"
 #include "teek_ns_client.h"
 
-struct pagelist_info {
-	uint64_t page_num;
-	uint64_t page_size;
-	uint64_t sharedmem_offset;
-	uint64_t sharedmem_size;
-};
-
 int write_to_client(void __user *dest, size_t dest_size,
 	const void *src, size_t size, uint8_t kernel_api);
 int read_from_client(void *dest, size_t dest_size,

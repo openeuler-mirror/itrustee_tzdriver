@@ -213,10 +213,12 @@ int calc_task_hash(unsigned char *digest, uint32_t dig_len,
 	if (!mm) {
 		if (memset_s(digest, dig_len, 0, MAX_SHA_256_SZ))
 			return -EFAULT;
+		tlogi("kernel proc need not check\n");
 		return EOK;
 	}
 
 	if (pub_key_len != sizeof(uint32_t)) {
+		tloge("apk need not check\n");
 		mmput(mm);
 		return EOK;
 	}
@@ -279,6 +281,7 @@ static int check_proc_uid_path(const char *auth_ctx)
 	pro_dpath = get_proc_dpath(k_path, MAX_PATH_SIZE);
 	if (IS_ERR_OR_NULL(pro_dpath)) {
 		kfree(k_path);
+		tloge("dpath is null\n");
 		return CHECK_ACCESS_FAIL;
 	}
 
@@ -297,7 +300,7 @@ static int check_proc_uid_path(const char *auth_ctx)
 		goto clean;
 	}
 
-	if (strncmp(str_path_uid, auth_ctx, auth_ctx_len) != 0)
+	if (strnlen(str_path_uid, MAX_PATH_SIZE) != auth_ctx_len || strncmp(str_path_uid, auth_ctx, auth_ctx_len) != 0)
 		ret = ENTER_BYPASS_CHANNEL;
 	else
 		ret = CHECK_ACCESS_SUCC;
@@ -307,6 +310,15 @@ clean:
 	put_task_struct(current);
 	kfree(k_path);
 	return ret;
+}
+
+int check_hidl_auth(void)
+{
+	int ret = check_proc_uid_path(CA_HIDL_PATH_UID_AUTH_CTX);
+	if (ret != CHECK_ACCESS_SUCC)
+		return ret;
+
+	return CHECK_ACCESS_SUCC;
 }
 
 #ifdef CONFIG_TEECD_AUTH
@@ -324,5 +336,29 @@ int check_teecd_auth(void)
 int check_teecd_auth(void)
 {
 	return 0;
+}
+#endif
+
+#ifdef CONFIG_TEE_TELEPORT_AUTH
+int check_tee_teleport_auth(void)
+{
+	int ret = check_proc_uid_path(TEE_TELEPORT_PATH_UID_AUTH_CTX);
+	if (ret != 0) {
+		tlogd("check tee_teleport path failed, ret %d\n", ret);
+		return ret;
+	}
+	return CHECK_ACCESS_SUCC;
+}
+#endif
+
+#ifdef CONFIG_TEE_AGENTD_AUTH
+int check_tee_agentd_auth(void)
+{
+	int ret = check_proc_uid_path(TEE_AGENTD_PATH_UID_AUTH_CTX);
+	if (ret != 0) {
+		tloge("check agentd path failed, ret %d\n", ret);
+		return ret;
+	}
+	return CHECK_ACCESS_SUCC;
 }
 #endif

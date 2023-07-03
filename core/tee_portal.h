@@ -1,9 +1,5 @@
 /*
- * tz_spi_notify.h
- *
- * exported funcs for spi interrupt actions
- *
- * Copyright (c) 2012-2022 Huawei Technologies Co., Ltd.
+ * Copyright (c) 2023-2023 Huawei Technologies Co., Ltd.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -15,14 +11,12 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  */
-#ifndef TZ_SPI_NOTIFY_H
-#define TZ_SPI_NOTIFY_H
-#include <linux/platform_device.h>
-#include <linux/cdev.h>
-#include "teek_ns_client.h"
+#ifndef TEE_PORTAL_H
+#define TEE_PORTAL_H
 
-int tz_spi_init(struct device *class_dev, struct device_node *np);
-void free_tz_spi(struct device *class_dev);
-int send_notify_cmd(unsigned int cmd_id);
+int tee_portal_register(void *owner, void __user *arg);
+int tee_portal_unregister(const void *owner);
+int tee_portal_work(const void *owner);
+void tee_portal_init(void);
 
 #endif

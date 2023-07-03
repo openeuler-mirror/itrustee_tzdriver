@@ -7,10 +7,11 @@ set(TARGET_NAME tzdriver)
 
 # Add source files
 set(depend-objs "core/smc_smp.o core/tc_client_driver.o core/session_manager.o core/mailbox_mempool.o core/teek_app_load.o")
-set(depend-objs "${depend-objs} core/agent.o core/gp_ops.o core/mem.o core/cmdmonitor.o core/tz_spi_notify.o core/tz_pm.o core/tee_compat_check.o")
+set(depend-objs "${depend-objs} core/agent.o core/gp_ops.o core/mem.o core/cmdmonitor.o core/tzdebug.o core/tz_spi_notify.o core/tz_pm.o core/tee_compat_check.o")
 set(depend-objs "${depend-objs} auth/auth_base_impl.o auth/client_hash_auth.o tlogger/tlogger.o tlogger/log_pages_cfg.o ko_adapt.o")
 set(depend-objs "${depend-objs} core/reserved_mempool.o tzdriver_internal/tee_trace_event/tee_trace_event.o tzdriver_internal/tee_trace_event/tee_trace_interrupt.o")
-set(depend-objs "${depend-objs} core/shared_mem.o")
+set(depend-objs "${depend-objs} core/shared_mem.o core/smc_abi.o core/tee_info.o tzdriver_internal/tee_reboot/reboot.o")
+set(depend-objs "${depend-objs} core/tee_portal.o core/tc_cvm_driver.o")
 
 # Check libboundscheck.so
 execute_process(COMMAND cat /proc/kallsyms COMMAND grep vsnprintf_s OUTPUT_VARIABLE RESULT)
@@ -30,7 +31,7 @@ set(KERNEL_DIR ${KPATH}/${KDIR})
 
 # Set extra options
 set(CMAKE_EXTRA_FLAGS "-fstack-protector-strong -DCONFIG_TEELOG -DCONFIG_TZDRIVER_MODULE -DCONFIG_TEECD_AUTH -DCONFIG_PAGES_MEM=y -DCONFIG_CLOUDSERVER_TEECD_AUTH")
-set(CMAKE_EXTRA_FLAGS "${CMAKE_EXTRA_FLAGS} -DCONFIG_CPU_AFF_NR=0 -DCONFIG_BIG_SESSION=1000 -DCONFIG_NOTIFY_PAGE_ORDER=4 -DCONFIG_512K_LOG_PAGES_MEM -DCONFIG_TEE_TRACE")
+set(CMAKE_EXTRA_FLAGS "${CMAKE_EXTRA_FLAGS} -DCONFIG_CPU_AFF_NR=0 -DCONFIG_BIG_SESSION=100 -DCONFIG_NOTIFY_PAGE_ORDER=4 -DCONFIG_512K_LOG_PAGES_MEM -DCONFIG_TEE_TRACE")
 set(CMAKE_EXTRA_FLAGS "${CMAKE_EXTRA_FLAGS} -DCONFIG_TEE_LOG_ACHIVE_PATH=\\\\\\\"/var/log/tee/last_teemsg\\\\\\\"")
 set(CMAKE_EXTRA_FLAGS "${CMAKE_EXTRA_FLAGS} -DNOT_TRIGGER_AP_RESET -DLAST_TEE_MSG_ROOT_GID -DCONFIG_NOCOPY_SHAREDMEM")
 set(CMAKE_EXTRA_FLAGS "${CMAKE_EXTRA_FLAGS} -DTEECD_PATH_UID_AUTH_CTX=\\\\\\\"/usr/bin/teecd:0\\\\\\\"")
@@ -39,6 +40,10 @@ set(CMAKE_EXTRA_FLAGS "${CMAKE_EXTRA_FLAGS} -I${PROJECT_SOURCE_DIR}/libboundsche
 set(CMAKE_EXTRA_FLAGS "${CMAKE_EXTRA_FLAGS} -I${PROJECT_SOURCE_DIR}/tlogger -I${PROJECT_SOURCE_DIR}/tzdriver_internal/kthread_affinity -I${PROJECT_SOURCE_DIR}/tzdriver_internal/include")
 set(CMAKE_EXTRA_FLAGS "${CMAKE_EXTRA_FLAGS} -I${PROJECT_SOURCE_DIR}/tzdriver_internal/tee_trace_event")
 set(CMAKE_EXTRA_FLAGS "${CMAKE_EXTRA_FLAGS} -isystem /usr/lib/gcc/aarch64-linux-gnu/10.3.1/include")
+set(CMAKE_EXTRA_FLAGS "${CMAKE_EXTRA_FLAGS} -DCONFIG_TEE_TELEPORT_SUPPORT -DCONFIG_TEE_TELEPORT_AUTH -DTEE_TELEPORT_PATH_UID_AUTH_CTX=\\\\\\\"/usr/bin/tee_teleport:0\\\\\\\"")
+set(CMAKE_EXTRA_FLAGS "${CMAKE_EXTRA_FLAGS} -DCONFIG_CONFIDENTIAL_CONTAINER -DCONFIG_TEE_AGENTD_AUTH -DTEE_AGENTD_PATH_UID_AUTH_CTX=\\\\\\\"/usr/bin/agentd:0\\\\\\\"")
+set(CMAKE_EXTRA_FLAGS "${CMAKE_EXTRA_FLAGS} -DCONFIG_TA_AFFINITY=y -DCONFIG_TA_AFFINITY_CPU_NUMS=128 -DCONFIG_TEE_UPGRADE -DCONFIG_TEE_REBOOT -DCONFIG_CONFIDENTIAL_TEE")
+set(CMAKE_EXTRA_FLAGS "${CMAKE_EXTRA_FLAGS} -I${PROJECT_SOURCE_DIR}/tzdriver_internal/tee_reboot -DMAILBOX_POOL_COUNT=8")
 
 # Compile .ko file
 add_custom_target(${TARGET_NAME} ALL COMMAND @echo "Compiling module ${TARGET_NAME}.ko...")

@@ -95,6 +95,12 @@ struct tc_ns_client_time {
 	uint32_t millis;
 };
 
+struct tc_ns_tee_info {
+	uint16_t tzdriver_version_major;
+	uint16_t tzdriver_version_minor;
+	uint32_t reserved[15];
+};
+
 enum secfile_type_t {
 	LOAD_TA = 0,
 	LOAD_SERVICE,
@@ -142,11 +148,12 @@ struct tc_ns_client_crl {
 	uint32_t size;
 };
 
-#define TST_CMD_01 1
-#define TST_CMD_02 2
-#define TST_CMD_03 3
-#define TST_CMD_04 4
-#define TST_CMD_05 5
+#ifdef CONFIG_LOG_POOL_ENABLE
+struct tc_ns_log_pool {
+	uint64_t addr;
+	uint64_t size;
+};
+#endif
 
 #define MAX_SHA_256_SZ 32
 
@@ -176,8 +183,6 @@ struct tc_ns_client_crl {
 	_IOWR(TC_NS_CLIENT_IOC_MAGIC, 13, struct tc_ns_client_context)
 #define TC_NS_CLIENT_IOCTL_LOGIN \
 	_IOWR(TC_NS_CLIENT_IOC_MAGIC, 14, int)
-#define TC_NS_CLIENT_IOCTL_TST_CMD_REQ \
-	_IOWR(TC_NS_CLIENT_IOC_MAGIC, 15, int)
 #define TC_NS_CLIENT_IOCTL_TUI_EVENT \
 	_IOWR(TC_NS_CLIENT_IOC_MAGIC, 16, int)
 #define TC_NS_CLIENT_IOCTL_SYC_SYS_TIME \
@@ -192,5 +197,16 @@ struct tc_ns_client_crl {
 	_IOWR(TC_NS_CLIENT_IOC_MAGIC, 21, unsigned int)
 #define TC_NS_CLIENT_IOCTL_UPDATE_TA_CRL\
 	_IOWR(TC_NS_CLIENT_IOC_MAGIC, 22, struct tc_ns_client_crl)
-
+#ifdef CONFIG_LOG_POOL_ENABLE
+#define TC_NS_CLIENT_IOCTL_GET_LOG_POOL \
+	_IOWR(TC_NS_CLIENT_IOC_MAGIC, 23, struct tc_ns_log_pool)
+#endif
+#ifdef CONFIG_TEE_TELEPORT_SUPPORT
+#define TC_NS_CLIENT_IOCTL_PORTAL_REGISTER \
+	_IOWR(TC_NS_CLIENT_IOC_MAGIC, 24, struct agent_ioctl_args)
+#define TC_NS_CLIENT_IOCTL_PORTAL_WORK \
+	_IOWR(TC_NS_CLIENT_IOC_MAGIC, 25, struct agent_ioctl_args)
+#endif
+#define TC_NS_CLIENT_IOCTL_GET_TEE_INFO \
+	_IOWR(TC_NS_CLIENT_IOC_MAGIC, 26, struct tc_ns_tee_info)
 #endif

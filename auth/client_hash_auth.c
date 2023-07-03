@@ -54,7 +54,7 @@ struct sdesc_hash {
 #define DEFAULT_TEXT_OFF 0
 #define LIBTEEC_NAME_MAX_LEN 50
 
-const char g_libso[KIND_OF_SO][LIBTEEC_NAME_MAX_LEN] = {"libteec_vendor.so"};
+const char g_libso[KIND_OF_SO][LIBTEEC_NAME_MAX_LEN] = {"libteec_vendor.so", "libteec.huawei.so"};
 
 static int find_lib_code_area(struct mm_struct *mm,
 	struct vm_area_struct **lib_code_area, int so_index)
@@ -295,7 +295,7 @@ static struct sdesc_hash *init_sdesc(struct crypto_shash *alg)
 
 	size = sizeof(struct shash_desc) + crypto_shash_descsize(alg);
 	sdesc = kmalloc(size, GFP_KERNEL);
-	if (sdesc == NULL)
+	if (ZERO_OR_NULL_PTR((unsigned long)(uintptr_t)(sdesc)))
 		return ERR_PTR(-ENOMEM);
 	sdesc->shash.tfm = alg;
 	return sdesc;
@@ -428,7 +428,7 @@ static int uid_compare(uint32_t uid, const char* uid_str, uint32_t uid_len)
 }
 
 /* "username:[encrypted password]:uid:gid:[comments]:home directory:login shell" */
-static uint32_t parse_uname(uint32_t uid, char *username, int buffer_len)
+static int32_t parse_uname(uint32_t uid, char *username, int buffer_len)
 {
 	char *str = username;
 	char *token = strsep(&str, ":");
@@ -448,24 +448,16 @@ static uint32_t parse_uname(uint32_t uid, char *username, int buffer_len)
 }
 static int read_line(char *buf, int buf_len, struct file *fp, loff_t *offset)
 {
-	ssize_t ret;
-	ssize_t i;
 	if (offset == NULL) {
 		tloge("offset is null while read file\n");
 		return -1;
 	}
-	ret = kernel_read(fp, buf, buf_len, offset);
+	ssize_t ret = kernel_read(fp, buf, buf_len, offset);
 	if (ret < 0)
 		return -1;
-	i = 0;
+	ssize_t i = 0;
 	/* read buf_len, need to find first '\n' */
-	while(i < ret) {
-		if (i >= buf_len)
-			break;
-		if (buf[i] == '\n')
-			break;
-		i++;
-	}
+	while(buf[i++] != '\n' && i < ret);
 	if (i < ret)
 		*offset -= (loff_t)(ret - i);
 	if (i < buf_len)
@@ -480,19 +472,19 @@ static int read_line(char *buf, int buf_len, struct file *fp, loff_t *offset)
 */
 int tc_ns_get_uname(uint32_t uid, char *username, int buffer_len, uint32_t *out_len)
 {
-	struct file *f = NULL;
-	loff_t offset = 0;
 	if (username == NULL || out_len == NULL || buffer_len != FIXED_PKG_NAME_LENGTH) {
 		tloge("params is null\n");
 		return -1;
 	}
+	struct file *f = NULL;
+	loff_t offset = 0;
 	f = filp_open(PASSWD_FILE, O_RDONLY, 0);
 	if (IS_ERR(f)) {
 		tloge("kernel open passwd file failed\n");
 		return -1;
 	}
 	while (read_line(username, buffer_len, f, &offset) == 0) {
-		uint32_t ret = parse_uname(uid, username, buffer_len);
+		int32_t ret = parse_uname(uid, username, buffer_len);
 		if (ret >= 0) {
 			*out_len = ret;
 			filp_close(f, NULL);

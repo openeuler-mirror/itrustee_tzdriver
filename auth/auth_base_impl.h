@@ -18,8 +18,32 @@
 #ifndef AUTH_BASE_IMPL_H
 #define AUTH_BASE_IMPL_H
 
+#ifndef SELINUX_CA_HIDL_LABEL
+#define SELINUX_CA_HIDL_LABEL ""
+#endif
+
+#ifndef SELINUX_TEECD_LABEL
+#define SELINUX_TEECD_LABEL ""
+#endif
+
+#ifndef SELINUX_TEE_TELEPORT_LABEL
+#define SELINUX_TEE_TELEPORT_LABEL ""
+#endif
+
+#ifndef SELINUX_TEE_AGENTD_LABEL
+#define SELINUX_TEE_AGENTD_LABEL ""
+#endif
+
+#ifndef CA_HIDL_PATH_UID_AUTH_CTX
+#define CA_HIDL_PATH_UID_AUTH_CTX ""
+#endif
+
 #ifndef TEECD_PATH_UID_AUTH_CTX
 #define TEECD_PATH_UID_AUTH_CTX ""
+#endif
+
+#ifndef CADAEMON_PATH_UID_AUTH_CTX
+#define CADAEMON_PATH_UID_AUTH_CTX ""
 #endif
 
 #if ((defined CONFIG_CLIENT_AUTH) || (defined CONFIG_TEECD_AUTH))
@@ -58,6 +82,7 @@ struct crypto_shash *get_shash_handle(void);
 void init_crypto_hash_lock(void);
 void mutex_crypto_hash_lock(void);
 void mutex_crypto_hash_unlock(void);
+int check_hidl_auth(void);
 int check_teecd_auth(void);
 #else
 
@@ -77,5 +102,13 @@ int check_teecd_auth(void)
 }
 
 #endif /* CLIENT_AUTH || TEECD_AUTH */
+
+#ifdef CONFIG_TEE_TELEPORT_AUTH
+int check_tee_teleport_auth(void);
+#endif
+
+#ifdef CONFIG_TEE_AGENTD_AUTH
+int check_tee_agentd_auth(void);
+#endif
 
 #endif

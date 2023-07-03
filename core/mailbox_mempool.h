@@ -26,6 +26,11 @@
 #define MAILBOX_POOL_SIZE SZ_4M
 #endif
 
+struct mailbox_buffer {
+	uint64_t buffer;
+	uint32_t size;
+};
+
 /* alloc options */
 #define MB_FLAG_ZERO 0x1 /* set 0 after alloc page */
 #define GLOBAL_UUID_LEN 17 /* first char represent global cmd */

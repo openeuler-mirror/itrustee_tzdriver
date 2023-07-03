@@ -28,13 +28,27 @@
 #define TC_NS_CLIENT_IOC_MAGIC  't'
 #define TC_NS_CLIENT_DEV        "tc_ns_client"
 #define TC_PRIV_DEV             "tc_private"
+#define TC_NS_CVM_DEV           "tc_ns_cvm"
 #define TC_NS_CLIENT_DEV_NAME   "/dev/tc_ns_client"
 
 #define EXCEPTION_MEM_SIZE (8*1024) /* mem for exception handling */
+
 #define TSP_REQUEST        0xB2000008
 #define TSP_RESPONSE       0xB2000009
+
 #define TSP_REE_SIQ        0xB200000A
 #define TSP_CRASH          0xB200000B
+
+#ifdef CONFIG_TEE_UPGRADE
+#define TSP_REBOOT         0xB2000012
+#define TSP_CPU_ON         0xB2000013
+#define TSP_REBOOT_DONE    0xB2000015
+#else
+#define TSP_REBOOT         0xB200000E
+#define TSP_CPU_ON         0xB200000F
+#define TSP_REBOOT_DONE    0xB2000010
+#endif
+
 #define TSP_PREEMPTED      0xB2000005
 #define TC_CALL_GLOBAL     0x01
 #define TC_CALL_SYNC       0x02
@@ -84,6 +98,7 @@ struct tc_ns_service {
 	struct list_head head;
 	struct mutex operation_lock; /* for session's open/close */
 	atomic_t usage;
+	unsigned int nsid;
 };
 
 #define SERVICES_MAX_COUNT 32 /* service limit can opened on 1 fd */
@@ -112,7 +127,13 @@ struct tc_ns_dev_file {
 	uint32_t pub_key_len;
 	uint8_t pub_key[MAX_PUBKEY_LEN];
 	int load_app_flag;
+#ifdef CONFIG_CONFIDENTIAL_CONTAINER
+	uint32_t nsid;
+#endif
 	struct completion close_comp; /* for kthread close unclosed session */
+#ifdef CONFIG_TEE_TELEPORT_SUPPORT
+	bool portal_enabled;
+#endif
 };
 
 union tc_ns_parameter {
@@ -150,6 +171,7 @@ enum smc_cmd_type {
 	CMD_TYPE_TA_AGENT,
 	CMD_TYPE_TA2TA_AGENT, /* compatible with TA2TA2TA->AGENT etc. */
 	CMD_TYPE_BUILDIN_AGENT,
+	CMD_TYPE_RELEASE_AGENT, /* only for release agent */
 };
 
 struct tc_ns_smc_cmd {
@@ -171,6 +193,7 @@ struct tc_ns_smc_cmd {
 	unsigned int uid;
 	unsigned int ca_pid; /* pid */
 	unsigned int pid;    /* tgid */
+	unsigned int nsid;
 	unsigned int eventindex;     /* tee audit event index for upload */
 	bool started;
 } __attribute__((__packed__));
