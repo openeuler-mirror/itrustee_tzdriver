@@ -9,6 +9,7 @@ tzdriver-objs += core/agent.o core/gp_ops.o core/mem.o core/cmdmonitor.o core/tz
 tzdriver-objs += auth/auth_base_impl.o auth/client_hash_auth.o tlogger/tlogger.o tlogger/log_pages_cfg.o ko_adapt.o
 tzdriver-objs += core/reserved_mempool.o tzdriver_internal/tee_trace_event/tee_trace_event.o tzdriver_internal/tee_trace_event/tee_trace_interrupt.o
 tzdriver-objs += core/shared_mem.o core/smc_abi.o
+tzdriver-objs += core/tee_client_api.o
 tzdriver-objs += core/tee_info.o
 tzdriver-objs += tzdriver_internal/tee_reboot/reboot.o
 
