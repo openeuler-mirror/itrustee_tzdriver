@@ -51,7 +51,7 @@ struct pending_entry {
 };
 
 #ifdef CONFIG_BIG_SESSION
-#define MAX_SMC_CMD CONFIG_BIG_SESSION
+#define MAX_SMC_CMD (CONFIG_BIG_SESSION * 10)
 #else
 #define MAX_SMC_CMD 18
 #endif
@@ -102,6 +102,29 @@ struct tc_ns_smc_queue {
 	struct tc_ns_smc_cmd out[MAX_SMC_CMD];
 };
 
+#define SYM_NAME_LEN_MAX 16
+#define SYM_NAME_LEN_1 7
+#define SYM_NAME_LEN_2 4
+#define CRASH_REG_NUM 3
+#define LOW_FOUR_BITE 4
+
+union crash_inf {
+	uint64_t crash_reg[CRASH_REG_NUM];
+	struct {
+		uint8_t halt_reason : LOW_FOUR_BITE;
+		uint8_t app : LOW_FOUR_BITE;
+		char sym_name[SYM_NAME_LEN_1];
+		uint16_t off;
+		uint16_t size;
+		uint32_t far;
+		uint32_t fault;
+		union {
+			char sym_name_append[SYM_NAME_LEN_2];
+			uint32_t elr;
+		};
+	} crash_msg;
+};
+
 #define RESLEEP_TIMEOUT 15
 
 bool sigkill_pending(struct task_struct *tsk);
@@ -122,13 +145,11 @@ void foreach_pending_entry(void (*func)(struct pending_entry *));
 void put_pending_entry(struct pending_entry *pe);
 void show_cmd_bitmap(void);
 void wakeup_tc_siq(uint32_t siq_mode);
-void smc_set_cmd_buffer(void);
-unsigned long raw_smc_send(uint32_t cmd, phys_addr_t cmd_addr, uint32_t cmd_type, uint8_t wait);
 void occupy_clean_cmd_buf(void);
 void clr_system_crash_flag(void);
 void svc_thread_release(void);
-int send_smc_cmd_rebooting(uint32_t cmd_id, phys_addr_t cmd_addr, uint32_t cmd_type,
-			   const struct tc_ns_smc_cmd *in_cmd);
-void send_smc_reset_cmd_buffer(void);
+int send_smc_cmd_rebooting(uint32_t cmd_id, const struct tc_ns_smc_cmd *in_cmd);
+void send_smc_cmd_buffer(bool tee_is_dead);
+int parse_params_from_tee(void);
 
 #endif

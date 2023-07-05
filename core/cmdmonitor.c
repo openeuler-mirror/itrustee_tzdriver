@@ -41,7 +41,7 @@
 static int g_cmd_need_archivelog;
 static LIST_HEAD(g_cmd_monitor_list);
 static int g_cmd_monitor_list_size;
-
+static const long long g_memstat_report_freq = 2 * 60 * 60 * 1000;
 #define MAX_CMD_MONITOR_LIST 200
 #define MAX_AGENT_CALL_COUNT 250
 static DEFINE_MUTEX(g_cmd_monitor_lock);
@@ -51,6 +51,7 @@ static struct workqueue_struct *g_cmd_monitor_wq;
 static struct delayed_work g_cmd_monitor_work;
 static struct delayed_work g_cmd_monitor_work_archive;
 static int g_tee_detect_ta_crash;
+static struct tc_uuid g_crashed_ta_uuid;
 
 void get_time_spec(struct time_spec *time)
 {
@@ -76,14 +77,21 @@ static void tz_archivelog(void)
 {
 	schedule_cmd_monitor_work(&g_cmd_monitor_work_archive,
 		usecs_to_jiffies(0));
+	flush_delayed_work(&g_cmd_monitor_work_archive);
 }
 
-void cmd_monitor_ta_crash(int32_t type)
+void cmd_monitor_ta_crash(int32_t type, const uint8_t *ta_uuid, uint32_t uuid_len)
 {
-	g_tee_detect_ta_crash = ((type == TYPE_CRASH_TEE) ?
-		TYPE_CRASH_TEE : TYPE_CRASH_TA);
+	g_tee_detect_ta_crash = type;
+	if (g_tee_detect_ta_crash != TYPE_CRASH_TEE &&
+		ta_uuid != NULL && uuid_len == sizeof(struct tc_uuid)) {
+		if (memcpy_s(&g_crashed_ta_uuid, sizeof(g_crashed_ta_uuid),
+			ta_uuid, uuid_len) != EOK)
+			tloge("copy uuid failed when get ta crash\n");
+	}
 	tz_archivelog();
 	fault_monitor_start(type);
+	kbox_report(type, ta_uuid, uuid_len);
 }
 
 static int get_pid_name(pid_t pid, char *comm, size_t size)
@@ -97,21 +105,21 @@ static int get_pid_name(pid_t pid, char *comm, size_t size)
 	rcu_read_lock();
 
 #ifndef CONFIG_TZDRIVER_MODULE
-	task = find_task_by_vpid(pid);
+	task = find_task_by_pid_ns(pid, &init_pid_ns);
 #else
-	task = pid_task(find_vpid(pid), PIDTYPE_PID);
+	task = pid_task(find_pid_ns(pid, &init_pid_ns), PIDTYPE_PID);
 #endif
 	if (task)
 		get_task_struct(task);
 	rcu_read_unlock();
 	if (!task) {
-		tloge("get task failed\n");
+		tlogd("get task failed\n");
 		return -1;
 	}
 
 	sret = strncpy_s(comm, size, task->comm, strlen(task->comm));
 	if (sret != 0)
-		tloge("strncpy failed: errno = %d\n", sret);
+		tlogd("strncpy failed: errno = %d\n", sret);
 	put_task_struct(task);
 
 	return sret;
@@ -124,7 +132,7 @@ bool is_thread_reported(pid_t tid)
 
 	mutex_lock(&g_cmd_monitor_lock);
 	list_for_each_entry(monitor, &g_cmd_monitor_list, list) {
-		if (monitor->tid == tid) {
+		if (monitor->tid == tid && !is_tui_in_use(monitor->tid)) {
 			ret = (monitor->is_reported ||
 				monitor->agent_call_count >
 				MAX_AGENT_CALL_COUNT);
@@ -132,7 +140,26 @@ bool is_thread_reported(pid_t tid)
 		}
 	}
 	mutex_unlock(&g_cmd_monitor_lock);
+	flush_delayed_work(&g_cmd_monitor_work);
 	return ret;
+}
+
+void memstat_report(void)
+{
+	int ret;
+	struct tee_mem *meminfo = NULL;
+
+	meminfo = mailbox_alloc(sizeof(*meminfo), MB_FLAG_ZERO);
+	if (!meminfo) {
+		tloge("mailbox alloc failed\n");
+		return;
+	}
+
+	ret = get_tee_meminfo(meminfo);
+	if (ret != 0)
+		tlogd("get meminfo failed\n");
+
+	mailbox_free(meminfo);
 }
 
 void cmd_monitor_reset_context(void)
@@ -245,6 +272,7 @@ static void cmd_monitor_tickfn(struct work_struct *work)
 	tz_log_write();
 }
 
+#define MAX_CRASH_INFO_LEN 100
 static void cmd_monitor_archivefn(struct work_struct *work)
 {
 	(void)(work);
@@ -255,6 +283,8 @@ static void cmd_monitor_archivefn(struct work_struct *work)
 	if (g_tee_detect_ta_crash == TYPE_CRASH_TEE) {
 		tloge("detect teeos crash, panic\n");
 		report_log_system_panic();
+	} else if (g_tee_detect_ta_crash == TYPE_CRASH_TA ||
+		g_tee_detect_ta_crash == TYPE_KILLED_TA) {
 	}
 
 	g_tee_detect_ta_crash = 0;
@@ -412,3 +442,27 @@ void free_cmd_monitor(void)
 		g_cmd_monitor_wq = NULL;
 	}
 }
+
+#ifdef CONFIG_CONFIDENTIAL_TEE
+#define INSMOD_THREAD "insmod"
+#define TEECD_THREAD "teecd"
+bool check_running_ca(void)
+{
+	struct cmd_monitor *monitor = NULL;
+	bool has_running_ca = false;
+	mutex_lock(&g_cmd_monitor_lock);
+	list_for_each_entry(monitor, &g_cmd_monitor_list, list) {
+		char pname[TASK_COMM_LEN] = {0};
+		if (get_pid_name(monitor->pid, pname, sizeof(pname)) != 0) {
+			continue;
+		}
+		if (strncmp(pname, INSMOD_THREAD, sizeof(INSMOD_THREAD)) != 0 &&
+			strncmp(pname, TEECD_THREAD, sizeof(TEECD_THREAD)) != 0) {
+			tloge("detect running thread task:%s, please stop\n", pname);
+			has_running_ca = true;
+		}
+	}
+	mutex_unlock(&g_cmd_monitor_lock);
+	return has_running_ca;
+}
+#endif

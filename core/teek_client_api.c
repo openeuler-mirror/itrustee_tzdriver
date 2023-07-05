@@ -24,6 +24,7 @@
 #include <linux/sched.h>
 #include <linux/list.h>
 #include <linux/mutex.h>
+#include <linux/proc_ns.h>
 #include <asm/cacheflush.h>
 #include <linux/kthread.h>
 #include <linux/freezer.h>
@@ -313,7 +314,8 @@ uint32_t teek_check_operation(const struct teec_operation *operation)
  */
 int teek_is_agent_alive(unsigned int agent_id)
 {
-	return is_agent_alive(agent_id);
+	if (!get_tz_init_flag()) return EFAULT;
+	return is_agent_alive(agent_id, PROC_PID_INIT_INO);
 }
 
 /*
@@ -325,7 +327,7 @@ uint32_t teek_initialize_context(const char *name,
 	struct teec_context *context)
 {
 	int32_t ret;
-
+	if (!get_tz_init_flag()) return (uint32_t)TEEC_ERROR_BUSY;
 	/* name current not used */
 	(void)(name);
 	tlogd("teek_initialize_context Started:\n");
@@ -353,6 +355,7 @@ EXPORT_SYMBOL(teek_initialize_context);
  */
 void teek_finalize_context(struct teec_context *context)
 {
+    if (!get_tz_init_flag()) return;
 	tlogd("teek_finalize_context started\n");
 	if (!context || !context->dev) {
 		tloge("context or dev is null, not correct\n");
@@ -557,7 +560,7 @@ uint32_t teek_open_session(struct teec_context *context,
 {
 	int i;
 	uint32_t ret;
-
+	if (!get_tz_init_flag()) return (uint32_t)TEEC_ERROR_BUSY;
 	for (i = 0; i < RETRY_TIMES; i++) {
 		ret = proc_teek_open_session(context, session,
 			destination, connection_method, connection_data,

@@ -41,6 +41,9 @@
 #include <linux/sched/task.h>
 #endif
 #include <linux/completion.h>
+#ifndef CONFIG_CONFIDENTIAL_CONTAINER
+#include <linux/proc_ns.h>
+#endif
 #include <securec.h>
 #include "smc_smp.h"
 #include "mem.h"
@@ -59,6 +62,23 @@ static DEFINE_MUTEX(g_load_app_lock);
 /* record all service node and need mutex to avoid race */
 struct list_head g_service_list;
 DEFINE_MUTEX(g_service_list_lock);
+
+static int lock_interruptible(struct mutex *m)
+{
+	int ret;
+
+	do {
+		ret = mutex_lock_interruptible(m);
+		if (ret != 0) {
+			if (sigkill_pending(current))
+				return ret;
+			tloge("signal try relock ret %d", ret);
+			continue;
+		}
+	} while (0);
+
+	return 0;
+}
 
 void init_srvc_list(void)
 {
@@ -257,8 +277,8 @@ struct tc_ns_session *tc_find_session_by_uuid(unsigned int dev_file_id,
 	return session;
 }
 
-static int tc_ns_need_load_image(unsigned int file_id,
-	const unsigned char *uuid, unsigned int uuid_len)
+static int tc_ns_need_load_image(const struct tc_ns_dev_file *dev_file,
+	const unsigned char *uuid, unsigned int uuid_len, struct tc_ns_client_return *tee_ret)
 {
 	int ret;
 	int smc_ret;
@@ -266,10 +286,6 @@ static int tc_ns_need_load_image(unsigned int file_id,
 	struct mb_cmd_pack *mb_pack = NULL;
 	char *mb_param = NULL;
 
-	if (!uuid || uuid_len != UUID_LEN) {
-		tloge("invalid uuid\n");
-		return -ENOMEM;
-	}
 	mb_pack = mailbox_alloc_cmd_pack();
 	if (!mb_pack) {
 		tloge("alloc mb pack failed\n");
@@ -289,7 +305,10 @@ static int tc_ns_need_load_image(unsigned int file_id,
 	mb_pack->operation.params[0].memref.size = SZ_4K;
 	smc_cmd.cmd_id = GLOBAL_CMD_ID_NEED_LOAD_APP;
 	smc_cmd.cmd_type = CMD_TYPE_GLOBAL;
-	smc_cmd.dev_file_id = file_id;
+	smc_cmd.dev_file_id = dev_file->dev_file_id;
+#ifdef CONFIG_CONFIDENTIAL_CONTAINER
+	smc_cmd.nsid = dev_file->nsid;
+#endif
 	smc_cmd.context_id = 0;
 	smc_cmd.operation_phys = mailbox_virt_to_phys((uintptr_t)&mb_pack->operation);
 	smc_cmd.operation_h_phys =
@@ -298,6 +317,10 @@ static int tc_ns_need_load_image(unsigned int file_id,
 	smc_ret = tc_ns_smc(&smc_cmd);
 	if (smc_ret != 0) {
 		tloge("smc call returns error ret 0x%x\n", smc_ret);
+		if (smc_cmd.err_origin != TEEC_ORIGIN_COMMS && tee_ret != NULL) {
+			tee_ret->origin = smc_cmd.err_origin;
+			tee_ret->code = smc_ret;
+		}
 		ret = -EFAULT;
 		goto clean;
 	} else {
@@ -311,22 +334,47 @@ clean:
 	return ret;
 }
 
+static int init_ioctl_arg(struct tc_ns_dev_file *dev_file, const void __user *argp,
+	const struct load_secfile_ioctl_struct *k_argp, struct load_secfile_ioctl_struct *ioctl_arg)
+{
+	if (!dev_file) {
+		tloge("dev file is null\n");
+		return -EINVAL;
+	}
+	if (dev_file->kernel_api != TEE_REQ_FROM_KERNEL_MODE) {
+		if (!argp) {
+			tloge("argp is null\n");
+			return -EINVAL;
+		}
+		if (copy_from_user(ioctl_arg, argp, sizeof(*ioctl_arg))) {
+			tloge("copy from user failed\n");
+			return -ENOMEM;
+		}
+	} else {
+		if (!k_argp) {
+			tloge("k_argp is null\n");
+			return -EINVAL;
+		}
+		if (memcpy_s(ioctl_arg, sizeof(*ioctl_arg), k_argp, sizeof(*ioctl_arg)) != EOK) {
+			tloge("memcpy arg err\n");
+			return -ENOMEM;
+		}
+	}
+
+	return 0;
+}
+
 int tc_ns_load_secfile(struct tc_ns_dev_file *dev_file,
-	void __user *argp, bool is_from_client_node)
+	void __user *argp, const struct load_secfile_ioctl_struct *k_argp, bool is_from_client_node)
 {
 	int ret;
 	struct load_secfile_ioctl_struct ioctl_arg = { {0}, {0}, {NULL} };
 	bool load = true;
 	void *file_addr = NULL;
 
-	if (!dev_file || !argp) {
-		tloge("Invalid params !\n");
-		return -EINVAL;
-	}
-
-	if (copy_from_user(&ioctl_arg, argp, sizeof(ioctl_arg)) != 0) {
-		tloge("copy from user failed\n");
-		ret = -ENOMEM;
+	ret = init_ioctl_arg(dev_file, argp, k_argp, &ioctl_arg);
+	if (ret != 0) {
+		tloge("init ioctl args failed, ret %d\n", ret);
 		return ret;
 	}
 
@@ -347,8 +395,7 @@ int tc_ns_load_secfile(struct tc_ns_dev_file *dev_file,
 	}
 
 	if (ioctl_arg.sec_file_info.secfile_type == LOAD_TA) {
-		ret = tc_ns_need_load_image(dev_file->dev_file_id, ioctl_arg.uuid,
-						(unsigned int)UUID_LEN);
+		ret = tc_ns_need_load_image(dev_file, ioctl_arg.uuid, (unsigned int)UUID_LEN, NULL);
 		if (ret != 1) /* 1 means we need to load image */
 			load = false;
 	}
@@ -362,8 +409,10 @@ int tc_ns_load_secfile(struct tc_ns_dev_file *dev_file,
 				ioctl_arg.sec_file_info.secfile_type, ret);
 	}
 	mutex_unlock(&g_load_app_lock);
-	if (copy_to_user(argp, &ioctl_arg, sizeof(ioctl_arg)) != 0)
-		tloge("copy to user failed\n");
+	if (dev_file->kernel_api != TEE_REQ_FROM_KERNEL_MODE) {
+		if (copy_to_user(argp, &ioctl_arg, sizeof(ioctl_arg)) != 0)
+			tloge("copy to user failed\n");
+	}
 	return ret;
 }
 
@@ -524,7 +573,7 @@ static int check_login_method(struct tc_ns_dev_file *dev_file,
 }
 
 static struct tc_ns_service *tc_ref_service_in_dev(struct tc_ns_dev_file *dev,
-	const unsigned char *uuid, int uuid_size, bool *is_full)
+	const unsigned char *uuid, int uuid_size, unsigned int nsid, bool *is_full)
 {
 	uint32_t i;
 
@@ -532,7 +581,7 @@ static struct tc_ns_service *tc_ref_service_in_dev(struct tc_ns_dev_file *dev,
 		return NULL;
 
 	for (i = 0; i < SERVICES_MAX_COUNT; i++) {
-		if (dev->services[i] != NULL &&
+		if (dev->services[i] != NULL && dev->services[i]->nsid == nsid &&
 			memcmp(dev->services[i]->uuid, uuid, UUID_LEN) == 0) {
 			if (dev->service_ref[i] == MAX_REF_COUNT) {
 				*is_full = true;
@@ -566,6 +615,11 @@ static int tc_ns_service_init(const unsigned char *uuid, uint32_t uuid_len,
 		return -EFAULT;
 	}
 
+#ifdef CONFIG_CONFIDENTIAL_CONTAINER
+	service->nsid = task_active_pid_ns(current)->ns.inum;
+#else
+	service->nsid = PROC_PID_INIT_INO;
+#endif
 	INIT_LIST_HEAD(&service->session_list);
 	mutex_init(&service->session_lock);
 	list_add_tail(&service->head, &g_service_list);
@@ -578,7 +632,7 @@ static int tc_ns_service_init(const unsigned char *uuid, uint32_t uuid_len,
 }
 
 static struct tc_ns_service *tc_find_service_from_all(
-	const unsigned char *uuid, uint32_t uuid_len)
+	const unsigned char *uuid, uint32_t uuid_len, uint32_t nsid)
 {
 	struct tc_ns_service *service = NULL;
 
@@ -586,7 +640,7 @@ static struct tc_ns_service *tc_find_service_from_all(
 		return NULL;
 
 	list_for_each_entry(service, &g_service_list, head) {
-		if (memcmp(service->uuid, uuid, sizeof(service->uuid)) == 0)
+		if (memcmp(service->uuid, uuid, sizeof(service->uuid)) == 0 && service->nsid == nsid)
 			return service;
 	}
 
@@ -599,10 +653,15 @@ static struct tc_ns_service *find_service(struct tc_ns_dev_file *dev_file,
 	int ret;
 	struct tc_ns_service *service = NULL;
 	bool is_full = false;
+#ifdef CONFIG_CONFIDENTIAL_CONTAINER
+	unsigned int nsid = task_active_pid_ns(current)->ns.inum;
+#else
+	unsigned int nsid = PROC_PID_INIT_INO;
+#endif
 
 	mutex_lock(&dev_file->service_lock);
 	service = tc_ref_service_in_dev(dev_file, context->uuid,
-		UUID_LEN, &is_full);
+		UUID_LEN, nsid, &is_full);
 	/* if service has been opened in this dev or ref cnt is full */
 	if (service || is_full) {
 		/*
@@ -616,7 +675,7 @@ static struct tc_ns_service *find_service(struct tc_ns_dev_file *dev_file,
 		return service;
 	}
 	mutex_lock(&g_service_list_lock);
-	service = tc_find_service_from_all(context->uuid, UUID_LEN);
+	service = tc_find_service_from_all(context->uuid, UUID_LEN, nsid);
 	/* if service has been opened in other dev */
 	if (service) {
 		get_service_struct(service);
@@ -779,6 +838,9 @@ static int load_image_by_frame(struct load_img_params *params, unsigned int load
 		params->mb_pack->operation.params[3].value.a = index;
 		params->mb_pack->operation.params[1].value.a = sec_file_info->secfile_type;
 		smc_cmd.dev_file_id = params->dev_file->dev_file_id;
+#ifdef CONFIG_CONFIDENTIAL_CONTAINER
+		smc_cmd.nsid = params->dev_file->nsid;
+#endif
 		smc_ret = tc_ns_smc(&smc_cmd);
 		tlogd("configid=%u, ret=%d, load_flag=%d, index=%u\n",
 			params->mb_pack->operation.params[1].value.a, smc_ret,
@@ -903,8 +965,7 @@ static int load_ta_image(struct tc_ns_dev_file *dev_file,
 	tee_ret.origin = TEEC_ORIGIN_COMMS;
 
 	mutex_lock(&g_load_app_lock);
-	ret = tc_ns_need_load_image(dev_file->dev_file_id, context->uuid,
-		(unsigned int)UUID_LEN);
+	ret = tc_ns_need_load_image(dev_file, context->uuid, (unsigned int)UUID_LEN, &tee_ret);
 	if (ret == 1) { /* 1 means we need to load image */
 		if (!context->file_buffer) {
 			tloge("context's file_buffer is NULL");
@@ -926,6 +987,11 @@ static int load_ta_image(struct tc_ns_dev_file *dev_file,
 			mutex_unlock(&g_load_app_lock);
 			return ret;
 		}
+	}
+	if (ret != 0 && tee_ret.origin != TEEC_ORIGIN_COMMS) {
+		context->returns.code = tee_ret.code;
+		context->returns.origin = tee_ret.origin;
+		ret = EFAULT;
 	}
 	mutex_unlock(&g_load_app_lock);
 
@@ -958,7 +1024,8 @@ static int proc_open_session(struct tc_ns_dev_file *dev_file,
 		dev_file, context, session, flags
 	};
 
-	mutex_lock(&service->operation_lock);
+	if (lock_interruptible(&service->operation_lock) != 0)
+		return -EINTR;
 	ret = load_ta_image(dev_file, context);
 	if (ret != 0) {
 		tloge("load ta image failed\n");
@@ -1038,7 +1105,10 @@ int tc_ns_open_session(struct tc_ns_dev_file *dev_file,
 		tloge("calc client auth hash failed\n");
 		goto err_free_rsrc;
 	}
-
+#ifdef CONFIG_CONFIDENTIAL_CONTAINER
+	if (dev_file->nsid == 0)
+		dev_file->nsid = task_active_pid_ns(current)->ns.inum;
+#endif
 	ret = proc_open_session(dev_file, context, service, session, flags);
 	if (ret == 0)
 		goto err_clear_param;
@@ -1186,7 +1256,10 @@ void close_unclosed_session_in_kthread(struct tc_ns_dev_file *dev)
 	/* when self recovery, release session in reboot interface */
 	if (is_tee_rebooting())
 		return;
-
+#ifndef CONFIG_TA_AFFINITY
+	close_session_thread_fn(dev);
+	(void)close_thread;
+#else
 	close_thread = kthread_create(close_session_thread_fn,
 		dev, "close_fn_%6d", dev->dev_file_id);
 	if (unlikely(IS_ERR_OR_NULL(close_thread))) {
@@ -1198,6 +1271,7 @@ void close_unclosed_session_in_kthread(struct tc_ns_dev_file *dev)
 	wake_up_process(close_thread);
 	wait_for_completion(&dev->close_comp);
 	tlogd("wait for completion success\n");
+#endif
 }
 
 int tc_ns_close_session(struct tc_ns_dev_file *dev_file,
@@ -1227,7 +1301,10 @@ int tc_ns_close_session(struct tc_ns_dev_file *dev_file,
 	 * same session_id may appear in tzdriver, put session_list
 	 * add/del in service->operation_lock can avoid it.
 	 */
-	mutex_lock(&service->operation_lock);
+	if (lock_interruptible(&service->operation_lock) != 0) {
+		put_service_struct(service);
+		return -EINTR;
+	}
 	session = get_session(service, dev_file, context);
 	if (session) {
 		int ret2;

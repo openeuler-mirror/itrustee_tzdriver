@@ -16,6 +16,8 @@
  * GNU General Public License for more details.
  */
 #include "smc_smp.h"
+#include <linux/of.h>
+#include <linux/of_reserved_mem.h>
 #include <linux/sched.h>
 #include <linux/delay.h>
 #include <linux/mutex.h>
@@ -40,6 +42,7 @@
 #include <linux/version.h>
 #include <linux/cpumask.h>
 #include <linux/err.h>
+#include <linux/proc_ns.h>
 
 #if (KERNEL_VERSION(4, 14, 0) <= LINUX_VERSION_CODE)
 #include <linux/sched/mm.h>
@@ -66,9 +69,7 @@
 #include "secs_power_ctrl.h"
 #include "shared_mem.h"
 #include "internal_functions.h"
-#ifdef CONFIG_SMC_HOOK
-#include "smc_hook.h"
-#endif
+#include "smc_call.h"
 
 #define PREEMPT_COUNT            10000
 #define HZ_COUNT                 10
@@ -101,21 +102,6 @@
 /* Current state of the system */
 static bool g_sys_crash;
 
-struct smc_in_params {
-	unsigned long x0;
-	unsigned long x1;
-	unsigned long x2;
-	unsigned long x3;
-	unsigned long x4;
-};
-
-struct smc_out_params {
-	unsigned long ret;
-	unsigned long exit_reason;
-	unsigned long ta;
-	unsigned long target;
-};
-
 struct shadow_work {
 	struct kthread_work kthwork;
 	struct work_struct work;
@@ -126,7 +112,7 @@ unsigned long g_shadow_thread_id = 0;
 static struct task_struct *g_siq_thread;
 static struct task_struct *g_smc_svc_thread;
 static struct task_struct *g_ipi_helper_thread;
-static struct kthread_worker g_ipi_helper_worker;
+static struct kthread_worker *g_ipi_helper_worker = NULL;
 
 enum cmd_reuse {
 	CLEAR,      /* clear this cmd index */
@@ -178,35 +164,42 @@ enum smc_ops_exit {
 #define SHADOW_EXIT_RUN             0x1234dead
 #define SMC_EXIT_TARGET_SHADOW_EXIT 0x1
 
-#define SYM_NAME_LEN_MAX 16
-#define SYM_NAME_LEN_1 7
-#define SYM_NAME_LEN_2 4
-#define CRASH_REG_NUM  3
-#define LOW_FOUR_BITE  4
-
-union crash_inf {
-	uint64_t crash_reg[CRASH_REG_NUM];
-	struct {
-		uint8_t halt_reason : LOW_FOUR_BITE;
-		uint8_t app : LOW_FOUR_BITE;
-		char sym_name[SYM_NAME_LEN_1];
-		uint16_t off;
-		uint16_t size;
-		uint32_t far;
-		uint32_t fault;
-		union {
-			char sym_name_append[SYM_NAME_LEN_2];
-			uint32_t elr;
-		};
-	} crash_msg;
-};
-
 #define compile_time_assert(cond, msg) typedef char g_assert_##msg[(cond) ? 1 : -1]
 
 #ifndef CONFIG_BIG_SESSION
 compile_time_assert(sizeof(struct tc_ns_smc_queue) <= PAGE_SIZE,
 	size_of_tc_ns_smc_queue_too_large);
 #endif
+
+static bool g_reserved_cmd_buffer = false;
+static u64 g_cmd_size = 0;
+static bool g_tz_uefi_enable = false;
+
+#ifndef CONFIG_TZDRIVER_MODULE
+static int __init tz_check_uefi_enable_func(char *str)
+{
+	if (str != NULL && *str == '1')
+		g_tz_uefi_enable = true;
+
+	return 0;
+}
+early_param("tz_uefi_enable", tz_check_uefi_enable_func);
+#endif
+
+#define MIN_CMDLINE_SIZE 0x1000
+static int reserved_cmdline(struct reserved_mem *rmem)
+{
+	if (g_tz_uefi_enable && rmem && rmem->size >= MIN_CMDLINE_SIZE) {
+		g_cmd_phys = rmem->base;
+		g_cmd_size = rmem->size;
+		g_reserved_cmd_buffer = true;
+	} else {
+		g_reserved_cmd_buffer = false;
+	}
+
+	return 0;
+}
+RESERVEDMEM_OF_DECLARE(g_teeos_cmdline, "teeos-cmdline", reserved_cmdline);
 
 static void acquire_smc_buf_lock(smc_buf_lock_t *lock)
 {
@@ -400,7 +393,7 @@ static void show_in_bitmap(int *cmd_in, uint32_t len)
 		}
 	}
 	bitmap[MAX_SMC_CMD] = '\0';
-	tloge("in bitmap: %s\n", bitmap);
+	tlogi("in bitmap: %s\n", bitmap);
 }
 
 static void show_out_bitmap(int *cmd_out, uint32_t len)
@@ -421,7 +414,7 @@ static void show_out_bitmap(int *cmd_out, uint32_t len)
 		}
 	}
 	bitmap[MAX_SMC_CMD] = '\0';
-	tloge("out bitmap: %s\n", bitmap);
+	tlogi("out bitmap: %s\n", bitmap);
 }
 
 static void show_doing_bitmap(void)
@@ -438,7 +431,7 @@ static void show_doing_bitmap(void)
 			bitmap[idx] = '0';
 	}
 	bitmap[MAX_SMC_CMD] = '\0';
-	tloge("doing bitmap: %s\n", bitmap);
+	tlogi("doing bitmap: %s\n", bitmap);
 }
 
 static void show_single_cmd_info(const int *cmd, uint32_t len)
@@ -451,7 +444,7 @@ static void show_single_cmd_info(const int *cmd, uint32_t len)
 	for (idx = 0; idx < MAX_SMC_CMD; idx++) {
 		if (cmd[idx] == -1)
 			break;
-		tloge("cmd[%d]: cmd_id=%u, ca_pid=%u, dev_id = 0x%x, "
+		tlogi("cmd[%d]: cmd_id=%u, ca_pid=%u, dev_id = 0x%x, "
 			"event_nr=%u, ret_val=0x%x\n",
 			cmd[idx],
 			g_cmd_data->in[cmd[idx]].cmd_id,
@@ -492,10 +485,10 @@ void show_cmd_bitmap(void)
 	show_doing_bitmap();
 	show_out_bitmap(cmd_out, MAX_SMC_CMD);
 
-	tloge("cmd in value:\n");
+	tlogi("cmd in value:\n");
 	show_single_cmd_info(cmd_in, MAX_SMC_CMD);
 
-	tloge("cmd_out value:\n");
+	tlogi("cmd_out value:\n");
 	show_single_cmd_info(cmd_out, MAX_SMC_CMD);
 
 	release_smc_buf_lock(&g_cmd_data->smc_lock);
@@ -704,104 +697,73 @@ static void set_smc_send_arg(struct smc_in_params *in_param,
 		in_param->x2, in_param->x3, in_param->x4);
 }
 
-#ifndef CONFIG_ARCH32
-static void send_asm_smc_cmd(struct smc_in_params *in_param,
+static void send_smc_cmd(struct smc_in_params *in_param,
+	struct smc_out_params *out_param, uint8_t wait)
+{
+	smc_req(in_param, out_param, wait);
+}
+
+static void send_smc_cmd_with_retry(struct smc_in_params *in_param,
 	struct smc_out_params *out_param)
 {
-	do {
-		asm volatile(
-			"mov x0, %[fid]\n"
-			"mov x1, %[a1]\n"
-			"mov x2, %[a2]\n"
-			"mov x3, %[a3]\n"
-			"mov x4, %[a4]\n"
-			"smc #0\n"
-			"str x0, [%[re0]]\n"
-			"str x1, [%[re1]]\n"
-			"str x2, [%[re2]]\n"
-			"str x3, [%[re3]]\n" :
-			[fid] "+r"(in_param->x0),
-			[a1] "+r"(in_param->x1),
-			[a2] "+r"(in_param->x2),
-			[a3] "+r"(in_param->x3),
-			[a4] "+r"(in_param->x4) :
-			[re0] "r"(&out_param->ret),
-			[re1] "r"(&out_param->exit_reason),
-			[re2] "r"(&out_param->ta),
-			[re3] "r"(&out_param->target) :
-			"x0", "x1", "x2", "x3", "x4", "x5", "x6", "x7",
-			"x8", "x9", "x10", "x11", "x12", "x13",
-			"x14", "x15", "x16", "x17");
-	} while (0);
-}
-#else
-static void send_asm_smc_cmd(struct smc_in_params *in_param,
-	struct smc_out_params *out_param)
-{
-	do {
-		asm volatile(
-			"mov r0, %[fid]\n"
-			"mov r1, %[a1]\n"
-			"mov r2, %[a2]\n"
-			"mov r3, %[a3]\n"
-			".arch_extension sec\n"
-			"smc #0\n"
-			"str r0, [%[re0]]\n"
-			"str r1, [%[re1]]\n"
-			"str r2, [%[re2]]\n"
-			"str r3, [%[re3]]\n" :
-			[fid] "+r"(in_param->x0),
-			[a1] "+r"(in_param->x1),
-			[a2] "+r"(in_param->x2),
-			[a3] "+r"(in_param->x3):
-			[re0] "r"(&out_param->ret),
-			[re1] "r"(&out_param->exit_reason),
-			[re2] "r"(&out_param->ta),
-			[re3] "r"(&out_param->target) :
-			"r0", "r1", "r2", "r3");
-	} while (0);
-}
+#if (CONFIG_CPU_AFF_NR != 0)
+	struct cpumask old_mask;
+	set_cpu_strategy(&old_mask);
 #endif
 
+retry:
+	send_smc_cmd(in_param, out_param, 0);
+
+	if (out_param->exit_reason == SMC_EXIT_PREEMPTED
+		&& out_param->ret == TSP_RESPONSE) {
+#if (!defined(CONFIG_PREEMPT)) || defined(CONFIG_RTOS_PREEMPT_OFF)
+		cond_resched();
+#endif
+		in_param->x1 = SMC_OPS_SCHEDTO;
+		goto retry;
+	}
+#if (CONFIG_CPU_AFF_NR != 0)
+	restore_cpu(&old_mask);
+#endif
+}
+
 #ifdef CONFIG_TEE_REBOOT
-int send_smc_cmd_rebooting(uint32_t cmd_id, phys_addr_t cmd_addr, uint32_t cmd_type,
-			   const struct tc_ns_smc_cmd *in_cmd)
+int send_smc_cmd_rebooting(uint32_t cmd_id, const struct tc_ns_smc_cmd *in_cmd)
 {
 	struct tc_ns_smc_cmd cmd = { {0}, 0 };
-	struct smc_in_params in_param = { cmd_id, cmd_addr, cmd_type, cmd_addr >> ADDR_TRANS_NUM, TEE_ERROR_IS_DEAD};
+	struct smc_in_params in_param = {cmd_id, 0, 0, 0, TEE_ERROR_IS_DEAD};
 	struct smc_out_params out_param = {0};
+	int cmd_index = 0;
 
 	if (in_cmd != NULL) {
 		if (memcpy_s(&cmd, sizeof(cmd), in_cmd, sizeof(*in_cmd)) != EOK) {
 			tloge("memcpy in cmd failed\n");
 			return -EFAULT;
 		}
+#ifdef CONFIG_CONFIDENTIAL_CONTAINER
+		cmd.nsid = task_active_pid_ns(current)->ns.inum;
+#else
+		cmd.nsid = PROC_PID_INIT_INO;
+#endif
 
-		if (occupy_free_smc_in_entry(&cmd) == -1) {
+		cmd_index = occupy_free_smc_in_entry(&cmd);
+		if (cmd_index == -1) {
 			tloge("there's no more smc entry\n");
 			return -ENOMEM;
 		}
+#ifdef CONFIG_TEE_UPGRADE
+		in_param.x2 = cmd_index;
+#endif
 	}
 
-retry:
-	isb();
-	wmb();
-	send_asm_smc_cmd(&in_param, &out_param);
-	isb();
-	wmb();
-
-	if (out_param.exit_reason == SMC_EXIT_PREEMPTED)
-		goto retry;
+	send_smc_cmd_with_retry(&in_param, &out_param);
 
 	return out_param.exit_reason;
 }
 #else
-int send_smc_cmd_rebooting(uint32_t cmd_id, phys_addr_t cmd_addr, uint32_t cmd_type,
-			   const struct tc_ns_smc_cmd *in_cmd)
+int send_smc_cmd_rebooting(uint32_t cmd_id, const struct tc_ns_smc_cmd *in_cmd)
 {
 	(void)cmd_id;
-	(void)cmd_addr;
-	(void)cmd_type;
 	(void)in_cmd;
 	return 0;
 }
@@ -821,13 +783,9 @@ static noinline int smp_smc_send(uint32_t cmd, unsigned long ops, unsigned long 
 #endif
 retry:
 	set_smc_send_arg(&in_param, secret, ops);
-	isb();
-	wmb();
 	tee_trace_add_event(SMC_SEND, 0);
-	send_asm_smc_cmd(&in_param, &out_param);
+	send_smc_cmd(&in_param, &out_param, 0);
 	tee_trace_add_event(SMC_DONE, 0);
-	isb();
-	wmb();
 	tlogd("[cpu %d] return val %lx exit_reason %lx ta %lx targ %lx\n",
 		raw_smp_processor_id(), out_param.ret, out_param.exit_reason,
 		out_param.ta, out_param.target);
@@ -861,88 +819,34 @@ retry:
 	return (int)out_param.ret;
 }
 
-#ifndef CONFIG_ARCH32
-static uint64_t send_smc_cmd(uint32_t cmd, phys_addr_t cmd_addr,
-	uint32_t cmd_type, uint8_t wait)
+static unsigned long raw_smc_send(uint32_t cmd, uint32_t param1,
+	uint32_t param2, uint8_t wait)
 {
-	struct smc_in_params in_param = { cmd, cmd_addr, cmd_type, cmd_addr >> ADDR_TRANS_NUM, 0 };
-	uint64_t ret = 0;
-
-	do {
-		asm volatile(
-			"mov x0, %[fid]\n"
-			"mov x1, %[a1]\n"
-			"mov x2, %[a2]\n"
-			"mov x3, %[a3]\n"
-			"mov x4, %[a4]\n"
-			"smc #0\n"
-			"str x0, [%[re0]]\n":
-			[fid] "+r"(in_param.x0),
-			[a1] "+r"(in_param.x1),
-			[a2] "+r"(in_param.x2),
-			[a3] "+r"(in_param.x3),
-			[a4] "+r"(in_param.x0):
-			[re0] "r"(&ret):
-			"x0", "x1", "x2", "x3", "x4", "x5", "x6", "x7");
-	} while (ret == TSP_REQUEST && wait != 0);
-
-	isb();
-	wmb();
-
-	return ret;
-}
-#else
-static uint32_t send_smc_cmd(uint32_t cmd, phys_addr_t cmd_addr,
-	uint32_t cmd_type, uint8_t wait)
-{
-	struct smc_in_params in_param = { cmd, cmd_addr, cmd_type, (uint64_t)cmd_addr >> ADDR_TRANS_NUM };
-	uint32_t ret = 0;
-
-	do {
-		asm volatile(
-			"mov r0, %[fid]\n"
-			"mov r1, %[a1]\n"
-			"mov r2, %[a2]\n"
-			"mov r3, %[a3]\n"
-			"mov r4, %[a4]\n"
-			".arch_extension sec\n"
-			"smc #0\n"
-			"str r0, [%[re0]]\n" :
-			[fid] "+r"(in_param.x0),
-			[a1] "+r"(in_param.x1),
-			[a2] "+r"(in_param.x2),
-			[a3] "+r"(in_param.x3),
-			[a4] "+r"(in_param.x0) :
-			[re0] "r"(&ret) :
-			"r0", "r1", "r2", "r3", "r4");
-	} while (ret == TSP_REQUEST && wait);
-
-	isb();
-	wmb();
-
-	return ret;
-}
-#endif
-
-unsigned long raw_smc_send(uint32_t cmd, phys_addr_t cmd_addr,
-	uint32_t cmd_type, uint8_t wait)
-{
-	unsigned long x0;
+	struct smc_in_params in_param = {cmd, param1, param2};
+	struct smc_out_params out_param = {0};
 
 #if (CONFIG_CPU_AFF_NR != 0)
 	struct cpumask old_mask;
 	set_cpu_strategy(&old_mask);
 #endif
-	x0 = send_smc_cmd(cmd, cmd_addr, cmd_type, wait);
+
+	send_smc_cmd(&in_param, &out_param, wait);
+
 #if (CONFIG_CPU_AFF_NR != 0)
 	restore_cpu(&old_mask);
 #endif
-	return x0;
+	return out_param.ret;
 }
 
-static void siq_dump(phys_addr_t mode, uint32_t siq_mode)
+static void siq_dump(uint32_t mode, uint32_t siq_mode)
 {
-	(void)raw_smc_send(TSP_REE_SIQ, mode, 0, false);
+	int ret = raw_smc_send(TSP_REE_SIQ, mode, 0, false);
+	if (ret == TSP_CRASH) {
+		tloge("TEEOS has crashed!\n");
+		g_sys_crash = true;
+		cmd_monitor_ta_crash(TYPE_CRASH_TEE, NULL, 0);
+	}
+
 	if (siq_mode == SIQ_DUMP_TIMEOUT) {
 		tz_log_write();
 	} else if (siq_mode == SIQ_DUMP_SHELL) {
@@ -982,6 +886,7 @@ static uint32_t get_undo_siq_index(void)
 
 #define RUN_SIQ_THREAD 1
 #define STOP_SIQ_THREAD 2
+#define MODE_DUMP 1
 static int siq_thread_fn(void *arg)
 {
 	int ret;
@@ -1003,7 +908,7 @@ static int siq_thread_fn(void *arg)
 			i = get_undo_siq_index();
 			if (i >= MAX_SIQ_NUM)
 				break;
-			siq_dump((phys_addr_t)(1), g_siq_queue[i]);
+			siq_dump(MODE_DUMP, g_siq_queue[i]);
 			g_siq_queue[i] = 0;
 		} while (true);
 		atomic_set(&g_siq_th_run, 0);
@@ -1050,15 +955,17 @@ static void upload_audit_event(unsigned int eventindex)
 }
 #endif
 
-static void cmd_result_check(const struct tc_ns_smc_cmd *cmd)
+static void cmd_result_check(const struct tc_ns_smc_cmd *cmd, int cmd_index)
 {
 	if (cmd->ret_val == (int)TEEC_PENDING || cmd->ret_val == (int)TEEC_PENDING2)
 		tlogd("wakeup command %u\n", cmd->event_nr);
 
 	if (cmd->ret_val == (int)TEE_ERROR_TAGET_DEAD) {
-		tloge("error smc call: ret = %x and cmd.err_origin=%x\n",
-			cmd->ret_val, cmd->err_origin);
-		cmd_monitor_ta_crash(TYPE_CRASH_TA);
+		bool ta_killed = g_cmd_data->in[cmd_index].cmd_id == GLOBAL_CMD_ID_KILL_TASK;
+		tloge("error smc call: ret = %x and cmd.err_origin=%x, [ta is %s]\n",
+			cmd->ret_val, cmd->err_origin, (ta_killed == true) ? "killed" : "crash");
+		cmd_monitor_ta_crash((ta_killed == true) ? TYPE_KILLED_TA : TYPE_CRASH_TA,
+			cmd->uuid, sizeof(struct tc_uuid));
 		ta_crash_report_log();
 	} else if (cmd->ret_val == (int)TEEC_ERROR_TUI_NOT_AVAILABLE) {
 		do_ns_tui_release();
@@ -1095,88 +1002,20 @@ static void set_shadow_smc_param(struct smc_in_params *in_params,
 	}
 }
 
-#ifndef CONFIG_ARCH32
 static void shadow_wo_pm(const void *arg, struct smc_out_params *out_params,
 	int *n_idled)
 {
 	struct smc_in_params in_params = {
-		TSP_REQUEST, SMC_OPS_START_SHADOW, current->pid, 0, *(const u64 *)arg
+		TSP_REQUEST, SMC_OPS_START_SHADOW, current->pid, 0, *(unsigned long *)arg
 	};
 
 	set_shadow_smc_param(&in_params, out_params, n_idled);
-	isb();
-	wmb();
 	tlogd("%s: [cpu %d] x0=%lx x1=%lx x2=%lx x3=%lx x4=%lx\n",
 		__func__, raw_smp_processor_id(), in_params.x0, in_params.x1,
 		in_params.x2, in_params.x3, in_params.x4);
-	do {
-		asm volatile(
-			"mov x0, %[fid]\n"
-			"mov x1, %[a1]\n"
-			"mov x2, %[a2]\n"
-			"mov x3, %[a3]\n"
-			"mov x4, %[a4]\n"
-			"smc #0\n"
-			"str x0, [%[re0]]\n"
-			"str x1, [%[re1]]\n"
-			"str x2, [%[re2]]\n"
-			"str x3, [%[re3]]\n" :
-			[fid] "+r"(in_params.x0), [a1] "+r"(in_params.x1),
-			[a2] "+r"(in_params.x2), [a3] "+r"(in_params.x3),
-			[a4] "+r"(in_params.x4) :
-			[re0] "r"(&out_params->ret),
-			[re1] "r"(&out_params->exit_reason),
-			[re2] "r"(&out_params->ta),
-			[re3] "r"(&out_params->target) :
-			"x0", "x1", "x2", "x3", "x4", "x5", "x6", "x7",
-			"x8", "x9", "x10", "x11", "x12", "x13",
-			"x14", "x15", "x16", "x17");
-	} while (0);
 
-	isb();
-	wmb();
+	smc_req(&in_params, out_params, 0);
 }
-#else
-static void shadow_wo_pm(const void *arg, struct smc_out_params *out_params,
-	int *n_idled)
-{
-	struct smc_in_params in_params = {
-		TSP_REQUEST, SMC_OPS_START_SHADOW, current->pid, 0, *(const u32 *)arg
-	};
-
-	set_shadow_smc_param(&in_params, out_params, n_idled);
-	isb();
-	wmb();
-	tlogd("%s: [cpu %d] x0=%lx x1=%lx x2=%lx x3=%lx x4=%lx\n",
-		__func__, raw_smp_processor_id(), in_params.x0, in_params.x1,
-		in_params.x2, in_params.x3, in_params.x4);
-	do {
-		asm volatile(
-			"mov r0, %[fid]\n"
-			"mov r1, %[a1]\n"
-			"mov r2, %[a2]\n"
-			"mov r3, %[a3]\n"
-			"mov r4, %[a4]\n"
-			".arch_extension sec\n"
-			"smc #0\n"
-			"str r0, [%[re0]]\n"
-			"str r1, [%[re1]]\n"
-			"str r2, [%[re2]]\n"
-			"str r3, [%[re3]]\n" :
-			[fid] "+r"(in_params.x0), [a1] "+r"(in_params.x1),
-			[a2] "+r"(in_params.x2), [a3] "+r"(in_params.x3),
-			[a4] "+r"(in_params.x4) :
-			[re0] "r"(&out_params->ret),
-			[re1] "r"(&out_params->exit_reason),
-			[re2] "r"(&out_params->ta),
-			[re3] "r"(&out_params->target) :
-			"r0", "r1", "r2", "r3");
-	} while (0);
-
-	isb();
-	wmb();
-}
-#endif
 
 static void set_preempted_counter(int *n_preempted, int *n_idled,
 	struct pending_entry *pe)
@@ -1236,7 +1075,7 @@ static bool check_shadow_crash(uint64_t crash_reason, int *ret_val)
 		tloge("power down cc failed\n");
 
 	g_sys_crash = true;
-	cmd_monitor_ta_crash(TYPE_CRASH_TEE);
+	cmd_monitor_ta_crash(TYPE_CRASH_TEE, NULL, 0);
 	report_log_system_error();
 	*ret_val = -1;
 	return true;
@@ -1332,7 +1171,18 @@ static void shadow_work_func(struct kthread_work *work)
 	}
 	tlogd("%s: create shadow thread %lu for target %llx\n",
 		__func__, g_shadow_thread_id, *target_arg);
+#if CONFIG_CPU_AFF_NR
+	struct cpumask shadow_mask;
+	unsigned int i;
+
+	cpumask_clear(&shadow_mask);
+	for (i = 0; i < CONFIG_CPU_AFF_NR; i++)
+		cpumask_set_cpu(i, &shadow_mask);
+
+	koadpt_kthread_bind_mask(shadow_thread, &shadow_mask);
+#else
 	tz_kthread_bind_mask(shadow_thread);
+#endif
 	wake_up_process(shadow_thread);
 }
 
@@ -1344,7 +1194,7 @@ static int proc_smc_wakeup_ca(pid_t ca, int which)
 		struct pending_entry *pe = find_pending_entry(ca);
 
 		if (!pe) {
-			(void)raw_smc_send(TSP_REE_SIQ, (phys_addr_t)ca, 0, false);
+			(void)raw_smc_send(TSP_REE_SIQ, (uint32_t)ca, 0, false);
 			tlogd("invalid ca pid=%d for pending entry\n",
 				(int)ca);
 			return -1;
@@ -1412,9 +1262,9 @@ int smc_queue_shadow_worker(uint64_t target)
 	};
 
 #if (KERNEL_VERSION(4, 9, 0) > LINUX_VERSION_CODE)
-	if (!queue_kthread_work(&g_ipi_helper_worker, &work.kthwork)) {
+	if (!queue_kthread_work(g_ipi_helper_worker, &work.kthwork)) {
 #else
-	if (!kthread_queue_work(&g_ipi_helper_worker, &work.kthwork)) {
+	if (!kthread_queue_work(g_ipi_helper_worker, &work.kthwork)) {
 #endif
 		tloge("ipi helper work fail queue, was already pending\n");
 		return -1;
@@ -1487,15 +1337,15 @@ static int smc_ops_normal(struct cmd_reuse_info *info,
 static int smp_smc_send_cmd_done(int cmd_index, struct tc_ns_smc_cmd *cmd,
 	struct tc_ns_smc_cmd *in)
 {
-	(void)cmd_index;
-	cmd_result_check(cmd);
+	cmd_result_check(cmd, cmd_index);
 	switch (cmd->ret_val) {
 	case TEEC_PENDING2: {
 		unsigned int agent_id = cmd->agent_id;
+		unsigned int nsid = cmd->nsid;
 		/* If the agent does not exist post
 		 * the answer right back to the TEE
 		 */
-		if (agent_process_work(cmd, agent_id) != 0)
+		if (agent_process_work(cmd, agent_id, nsid) != 0)
 			tloge("agent process work failed\n");
 		return PENDING2_RETRY;
 	}
@@ -1577,7 +1427,7 @@ static int smp_smc_send_process(struct tc_ns_smc_cmd *cmd, u64 ops,
 	struct smc_cmd_ret *cmd_ret, int cmd_index)
 {
 	int ret;
-
+	unsigned long ca;
 	tlogd("smc send start cmd_id = %u, ca = %u\n",
 		cmd->cmd_id, cmd->ca_pid);
 
@@ -1587,11 +1437,10 @@ static int smp_smc_send_process(struct tc_ns_smc_cmd *cmd, u64 ops,
 		return -1;
 	}
 
-#ifdef CONFIG_SMC_HOOK
-	call_smc_pre_hook(cmd->cmd_id);
-#endif
+	ca = is_ccos() ? (cmd_index) : ((unsigned long)(uint32_t)(current->pid));
+
 	ret = smp_smc_send(TSP_REQUEST, (unsigned long)ops,
-		(unsigned long)(uint32_t)(current->pid), cmd_ret, ops != SMC_OPS_ABORT_TASK);
+		ca, cmd_ret, ops != SMC_OPS_ABORT_TASK);
 
 	if (power_down_cc() != 0) {
 		tloge("power down cc failed\n");
@@ -1613,7 +1462,7 @@ static int smp_smc_send_process(struct tc_ns_smc_cmd *cmd, u64 ops,
 		print_crash_msg(&crash_info);
 
 		g_sys_crash = true;
-		cmd_monitor_ta_crash(TYPE_CRASH_TEE);
+		cmd_monitor_ta_crash(TYPE_CRASH_TEE, NULL, 0);
 
 		tee_wake_up_reboot();
 #ifndef CONFIG_TEE_REBOOT
@@ -1640,6 +1489,13 @@ static int init_for_smc_send(struct tc_ns_smc_cmd *in,
 	}
 
 	in->ca_pid = (unsigned int)current->pid;
+#ifdef CONFIG_CONFIDENTIAL_CONTAINER
+	if (in->nsid == 0)
+		in->nsid = task_active_pid_ns(current)->ns.inum;
+#else
+	in->nsid = PROC_PID_INIT_INO;
+#endif
+
 	if (reuse)
 		return 0;
 
@@ -1768,7 +1624,7 @@ enum smc_status_t {
 static long wait_event_internal(struct pending_entry *pe, struct timeout_step_t *step)
 {
 	if (!current->mm) {
-		return wait_event_interruptible_timeout(pe->wq, atomic_read(&pe->run),
+		return wait_event_freezable_timeout(pe->wq, atomic_read(&pe->run),
 				step->steps[step->cur]);
 	} else {
 		return wait_event_timeout(pe->wq, atomic_read(&pe->run),
@@ -1804,7 +1660,7 @@ resleep:
 			 */
 			if (timer_no_irq) {
 				*ops = SMC_OPS_SCHEDTO;
-				return PD_TIMEOUT;
+				return PD_WAKEUP;
 			} else {
 				goto resleep;
 			}
@@ -1877,6 +1733,13 @@ static enum smc_status_t handle_cmd_working_done(
 	return ST_DONE;
 }
 
+static void set_cmd_reuse_info(struct cmd_reuse_info *info, struct tc_ns_smc_cmd *in)
+{
+	info->saved_index = (int)in->event_nr;
+	info->cmd_index = (int)in->event_nr;
+	info->cmd_usage = RESEND;
+}
+
 static int smp_smc_send_func(struct tc_ns_smc_cmd *in, bool reuse)
 {
 	struct cmd_reuse_info info = { 0, 0, CLEAR };
@@ -1890,18 +1753,18 @@ static int smp_smc_send_func(struct tc_ns_smc_cmd *in, bool reuse)
 	if (init_for_smc_send(in, &pe, &cmd, reuse) != 0)
 		return TEEC_ERROR_GENERIC;
 
-	if (reuse) {
-		info.saved_index = (int)in->event_nr;
-		info.cmd_index = (int)in->event_nr;
-		info.cmd_usage = RESEND;
-	}
+	if (reuse)
+		set_cmd_reuse_info(&info, in);
 	ops = SMC_OPS_NORMAL;
 
 retry:
 #ifdef CONFIG_TEE_REBOOT
-	if (is_tee_rebooting() && in->cmd_id == GLOBAL_CMD_ID_SET_SERVE_CMD)
+	if (is_tee_rebooting() && in->cmd_id == GLOBAL_CMD_ID_SET_SERVE_CMD) {
+		release_pending_entry(pe);
 		return TEE_ERROR_IS_DEAD;
+	}
 #endif
+
 	set_timeout_step(&timeout_step);
 
 	if (smc_ops_normal(&info, &cmd, ops) != 0) {
@@ -1937,6 +1800,7 @@ clean:
 static int smc_svc_thread_fn(void *arg)
 {
 	(void)arg;
+	set_freezable();
 	while (!kthread_should_stop()) {
 		struct tc_ns_smc_cmd smc_cmd = { {0}, 0 };
 		int ret;
@@ -1991,6 +1855,13 @@ static int proc_tc_ns_smc(struct tc_ns_smc_cmd *cmd, bool reuse)
 		return TEE_ERROR_IS_DEAD;
 	}
 
+#ifdef CONFIG_TEE_UPGRADE
+	if (is_tee_rebooting()) {
+		tloge("tee is upgrading\n");
+		return TEE_ERROR_IS_DEAD;
+	}
+#endif
+
 	if (!cmd) {
 		tloge("invalid cmd\n");
 		return TEEC_ERROR_GENERIC;
@@ -2015,25 +1886,29 @@ int tc_ns_smc_with_no_nr(struct tc_ns_smc_cmd *cmd)
 	return proc_tc_ns_smc(cmd, true);
 }
 
-static void smc_work_no_wait(uint32_t type)
+void send_smc_cmd_buffer(bool tee_is_dead)
 {
-	(void)raw_smc_send(TSP_REQUEST, g_cmd_phys, type, true);
-}
+	struct smc_in_params in_param = {TSP_REQUEST, g_cmd_phys, TC_NS_CMD_TYPE_SECURE_CONFIG,
+		g_cmd_phys >> ADDR_TRANS_NUM};
+	struct smc_out_params out_param = {0};
 
-void send_smc_reset_cmd_buffer(void)
-{
-	send_smc_cmd_rebooting(TSP_REQUEST, g_cmd_phys, TC_NS_CMD_TYPE_SECURE_CONFIG, NULL);
+	if (tee_is_dead)
+		in_param.x4 = TEE_ERROR_IS_DEAD;
+
+	send_smc_cmd_with_retry(&in_param, &out_param);
 }
 
 static void smc_work_set_cmd_buffer(struct work_struct *work)
 {
 	(void)work;
-	smc_work_no_wait(TC_NS_CMD_TYPE_SECURE_CONFIG);
+	send_smc_cmd_buffer(false);
 }
 
 void smc_set_cmd_buffer(void)
 {
 	struct work_struct work;
+	if (g_reserved_cmd_buffer)
+		return;
 
 	INIT_WORK_ONSTACK(&work, smc_work_set_cmd_buffer);
 	/* Run work on CPU 0 */
@@ -2044,6 +1919,14 @@ void smc_set_cmd_buffer(void)
 
 static int alloc_cmd_buffer(void)
 {
+	if (g_reserved_cmd_buffer) {
+		tlogi("use reserved cmd buffer");
+		g_cmd_data = (struct tc_ns_smc_queue *)get_reserved_cmd_vaddr_of(g_cmd_phys, (uint64_t)g_cmd_size);
+		if (!g_cmd_data)
+			return -ENOMEM;
+
+		return 0;
+	}
 	g_cmd_data = (struct tc_ns_smc_queue *)(uintptr_t)get_cmd_mem_vaddr();
 	if (!g_cmd_data)
 		return -ENOMEM;
@@ -2068,9 +1951,9 @@ static int init_smc_related_rsrc(const struct device *class_dev)
 	koadpt_kthread_bind_mask(g_siq_thread, &new_mask);
 	/* some products specify the cpu that kthread need to bind */
 	tz_kthread_bind_mask(g_siq_thread);
-	kthread_init_worker(&g_ipi_helper_worker);
+	g_ipi_helper_worker = kthread_create_worker(0, "g_ipi_helper_worker");
 	g_ipi_helper_thread = kthread_create(kthread_worker_fn,
-		&g_ipi_helper_worker, "ipihelper");
+		g_ipi_helper_worker, "ipihelper");
 	if (IS_ERR_OR_NULL(g_ipi_helper_thread)) {
 		dev_err(class_dev, "couldn't create ipi helper threads %ld\n",
 			PTR_ERR(g_ipi_helper_thread));
@@ -2088,10 +1971,15 @@ static int init_smc_related_rsrc(const struct device *class_dev)
 	return 0;
 }
 
-static int parse_params_from_tee(void)
+int parse_params_from_tee(void)
 {
 	int ret;
 	void *buffer = NULL;
+
+	if (g_reserved_cmd_buffer) {
+		tlogw("uefi mode, not check teeos compat level\n");
+		return 0;
+	}
 
 	buffer = (void *)(g_cmd_data->in);
 	ret = check_teeos_compat_level((uint32_t *)buffer,
@@ -2185,8 +2073,10 @@ void svc_thread_release(void)
 void free_smc_data(void)
 {
 	struct pending_entry *pe = NULL, *temp = NULL;
-
-	free_cmd_mem((uint64_t)(uintptr_t)g_cmd_data);
+	if (g_reserved_cmd_buffer)
+		iounmap((void __iomem *)g_cmd_data);
+	else
+		free_cmd_mem((uint64_t)(uintptr_t)g_cmd_data);
 	smc_wakeup_broadcast();
 	svc_thread_release();
 	if (!IS_ERR_OR_NULL(g_siq_thread)) {
@@ -2197,10 +2087,12 @@ void free_smc_data(void)
 	}
 
 #if (KERNEL_VERSION(4, 9, 0) > LINUX_VERSION_CODE)
-	flush_kthread_worker(&g_ipi_helper_worker);
+	flush_kthread_worker(g_ipi_helper_worker);
 #else
-	kthread_flush_worker(&g_ipi_helper_worker);
+	kthread_flush_worker(g_ipi_helper_worker);
 #endif
+	kthread_destroy_worker(g_ipi_helper_worker);
+	g_ipi_helper_worker = NULL;
 	if (!IS_ERR_OR_NULL(g_ipi_helper_thread)) {
 		kthread_stop(g_ipi_helper_thread);
 		g_ipi_helper_thread = NULL;

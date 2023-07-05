@@ -42,6 +42,7 @@
 #include "smc_smp.h"
 #include "mem.h"
 #include "mailbox_mempool.h"
+#include "shared_mem.h"
 #include "tc_client_driver.h"
 #include "internal_functions.h"
 #include "reserved_mempool.h"
@@ -49,7 +50,7 @@
 
 #define MAX_SHARED_SIZE 0x100000      /* 1 MiB */
 
-static void free_operation(const struct tc_call_params *call_params,
+static void free_operation_params(const struct tc_call_params *call_params,
 	struct tc_op_params *op_params);
 
 /* dir: 0-inclue input, 1-include output, 2-both */
@@ -544,54 +545,6 @@ static int alloc_for_ref_mem(const struct tc_call_params *call_params,
 }
 
 #ifdef CONFIG_NOCOPY_SHAREDMEM
-static int fill_shared_mem_info(void *start_vaddr, uint32_t pages_no,
-	uint32_t offset, uint32_t buffer_size, void *buff)
-{
-	struct pagelist_info *page_info = NULL;
-	struct page **pages = NULL;
-	uint64_t *phys_addr = NULL;
-	uint32_t page_num;
-	uint32_t i;
-
-	if (pages_no == 0)
-		return -EFAULT;
-
-	pages = (struct page **)vmalloc(pages_no * sizeof(uint64_t));
-	if (pages == NULL)
-		return -EFAULT;
-
-	down_read(&mm_sem_lock(current->mm));
-	page_num = get_user_pages((uintptr_t)start_vaddr, pages_no, FOLL_WRITE, pages, NULL);
-	up_read(&mm_sem_lock(current->mm));
-	if (page_num != pages_no) {
-		tloge("get page phy addr failed\n");
-		if (page_num > 0)
-			release_pages(pages, page_num);
-		vfree(pages);
-		return -EFAULT;
-	}
-
-	page_info = buff;
-	page_info->page_num = pages_no;
-	page_info->page_size = PAGE_SIZE;
-	page_info->sharedmem_offset = offset;
-	page_info->sharedmem_size = buffer_size;
-
-	phys_addr = (uint64_t *)buff + (sizeof(*page_info) / sizeof(uint64_t));
-	for (i = 0; i < pages_no; i++) {
-		struct page *page = pages[i];
-		if (page == NULL) {
-			release_pages(pages, page_num);
-			vfree(pages);
-			return -EFAULT;
-		}
-		phys_addr[i] = (uintptr_t)page_to_phys(page);
-	}
-
-	vfree(pages);
-	return 0;
-}
-
 static int check_buffer_for_sharedmem(uint32_t *buffer_size,
 	const union tc_ns_client_param *client_param, uint8_t kernel_params)
 {
@@ -651,7 +604,7 @@ static int transfer_shared_mem(const struct tc_call_params *call_params,
 	if (buff == NULL)
 		return -EFAULT;
 
-	if (fill_shared_mem_info(start_vaddr, pages_no, offset, buffer_size, buff)) {
+	if (fill_shared_mem_info((uint64_t)start_vaddr, pages_no, offset, buffer_size, (uint64_t)buff)) {
 		mailbox_free(buff);
 		return -EFAULT;
 	}
@@ -768,7 +721,7 @@ static int alloc_operation(const struct tc_call_params *call_params,
 			break;
 	}
 	if (ret != 0) {
-		free_operation(call_params, op_params);
+		free_operation_params(call_params, op_params);
 		return ret;
 	}
 	op_params->mb_pack->operation.paramtypes =
@@ -958,27 +911,7 @@ static int update_client_operation(const struct tc_call_params *call_params,
 	return ret;
 }
 
-#ifdef CONFIG_NOCOPY_SHAREDMEM
-static void release_page(void *buf)
-{
-	uint32_t i;
-	uint64_t *phys_addr = NULL;
-	struct pagelist_info *page_info = NULL;
-	struct page *page = NULL;
-
-	page_info = buf;
-	phys_addr = (uint64_t *)buf + (sizeof(*page_info) / sizeof(uint64_t));
-	for (i = 0; i < page_info->page_num; i++) {
-		page = (struct page *)(uintptr_t)phys_to_page(phys_addr[i]);
-		if (page == NULL)
-			continue;
-		set_bit(PG_dirty, &page->flags);
-		put_page(page);
-	}
-}
-#endif
-
-static void free_operation(const struct tc_call_params *call_params, struct tc_op_params *op_params)
+static void free_operation_params(const struct tc_call_params *call_params, struct tc_op_params *op_params)
 {
 	uint32_t param_type;
 	uint32_t index;
@@ -1026,7 +959,7 @@ static void free_operation(const struct tc_call_params *call_params, struct tc_o
 #ifdef CONFIG_NOCOPY_SHAREDMEM
 			temp_buf = local_tmpbuf[index].temp_buffer;
 			if (temp_buf != NULL) {
-				release_page(temp_buf);
+				release_shared_mem_page(temp_buf, local_tmpbuf[index].size);
 				mailbox_free(temp_buf);
 			}
 #endif
@@ -1089,6 +1022,9 @@ static int init_smc_cmd(const struct tc_call_params *call_params,
 	}
 	smc_cmd->cmd_id = context->cmd_id;
 	smc_cmd->dev_file_id = call_params->dev->dev_file_id;
+#ifdef CONFIG_CONFIDENTIAL_CONTAINER
+	smc_cmd->nsid = call_params->dev->nsid;
+#endif
 	smc_cmd->context_id = context->session_id;
 	smc_cmd->err_origin = context->returns.origin;
 	smc_cmd->started = context->started;
@@ -1215,7 +1151,7 @@ static void release_tc_call_resource(const struct tc_call_params *call_params,
 		kill_ion_by_uuid((struct tc_uuid *)op_params->smc_cmd->uuid);
 
 	if (op_params->op_inited)
-		free_operation(call_params, op_params);
+		free_operation_params(call_params, op_params);
 
 	kfree(op_params->smc_cmd);
 	mailbox_free(op_params->mb_pack);

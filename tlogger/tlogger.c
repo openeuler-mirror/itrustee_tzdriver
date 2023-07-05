@@ -21,6 +21,8 @@
 #include <linux/poll.h>
 #include <linux/slab.h>
 #include <linux/version.h>
+#include <linux/pid_namespace.h>
+#include <linux/proc_ns.h>
 #include <linux/delay.h>
 #include <asm/ioctls.h>
 #include <linux/syscalls.h>
@@ -35,6 +37,11 @@
 #include "tc_ns_log.h"
 #include "ko_adapt.h"
 #include "internal_functions.h"
+#ifdef CONFIG_TEE_REBOOT
+#include "reboot.h"
+#endif
+#include "tee_info.h"
+#include "tee_compat_check.h"
 
 /* for log item ----------------------------------- */
 #define LOG_ITEM_MAGIC          0x5A5A
@@ -53,6 +60,7 @@
 #define SET_READERPOS_CUR_BASE 6
 #define SET_TLOGCAT_STAT_BASE  7
 #define GET_TLOGCAT_STAT_BASE  8
+#define GET_TEE_INFO_BASE      9
 
 /* get tee verison */
 #define MAX_TEE_VERSION_LEN     256
@@ -65,6 +73,8 @@
 	_IO(LOGGERIOCTL, SET_TLOGCAT_STAT_BASE)
 #define TEELOGGER_GET_TLOGCAT_STAT \
 	_IO(LOGGERIOCTL, GET_TLOGCAT_STAT_BASE)
+#define TEELOGGER_GET_TEE_INFO \
+	_IOR(LOGGERIOCTL, GET_TEE_INFO_BASE, struct tc_ns_tee_info)
 
 int g_tlogcat_f = 0;
 
@@ -73,14 +83,18 @@ int g_tlogcat_f = 0;
 #endif
 #define TEE_LOG_FILE_NAME_MAX 256
 
+#ifdef CONFIG_TEE_LOG_DUMP_PATH
+/* last read offset only for msg dump */
 uint32_t g_last_read_offset = 0;
+#endif
 
-#define NEVER_USED_LEN 32U
+#define NEVER_USED_LEN 28U
 #define LOG_ITEM_RESERVED_LEN 1U
 
 /* 64 byte head + user log */
 struct log_item {
 	unsigned char never_used[NEVER_USED_LEN];
+	unsigned int nsid;
 	unsigned short magic;
 	unsigned short reserved0;
 	uint32_t serial_no;
@@ -112,7 +126,8 @@ struct log_buffer_flag {
 	uint32_t last_pos;
 	uint32_t write_loops;
 	uint32_t log_level;
-	uint32_t reserved[LOG_BUFFER_RESERVED_LEN]; /* [0] for magic, [1] for serial_no */
+	/* [0] is magic failed, [1] is serial_no failed, used fior log retention feature */
+	uint32_t reserved[LOG_BUFFER_RESERVED_LEN];
 	uint32_t max_len;
 	unsigned char version_info[VERSION_INFO_LEN];
 };
@@ -127,17 +142,27 @@ static struct log_buffer *g_log_buffer = NULL;
 struct tlogger_log {
 	unsigned char *buffer_info; /* ring buffer info */
 	struct mutex mutex_info; /* this mutex protects buffer_info */
-	wait_queue_head_t wait_queue_head; /* wait queue head for reader */
 	struct list_head logs; /* log channels list */
+	struct mutex mutex_log_chnl; /* this mutex protects log channels */
 	struct miscdevice misc_device; /* misc device log */
 	struct list_head readers; /* log's readers */
 };
 
 static LIST_HEAD(m_log_list);
 
+struct tlogger_group {
+	struct list_head node;
+	uint32_t nsid;
+	volatile uint32_t reader_cnt;
+	volatile uint32_t tlogf_stat;
+};
+
 struct tlogger_reader {
 	struct tlogger_log *log; /* tlogger_log info data */
+	struct tlogger_group *group; /* tlogger_group info data */
+	struct pid *pid; /* current process pid */
 	struct list_head list; /* log entry in tlogger_log's list */
+	wait_queue_head_t wait_queue_head; /* wait queue head for reader */
 	/* Current reading position, start position of next read again */
 	uint32_t r_off;
 	uint32_t r_loops;
@@ -152,6 +177,9 @@ struct tlogger_reader {
 static uint32_t g_log_mem_len = 0;
 static uint32_t g_tlogcat_count = 0;
 static struct tlogger_log *g_log;
+
+static struct mutex g_reader_group_mutex;
+static LIST_HEAD(g_reader_group_list);
 
 static struct tlogger_log *get_reader_log(const struct file *file)
 {
@@ -203,6 +231,17 @@ static struct log_item *get_next_log_item(const unsigned char *buffer_start,
 	return item;
 }
 
+static bool check_group_compat(struct tlogger_group *group, struct log_item *item)
+{
+	if (group->nsid == item->nsid)
+		return true;
+
+	if (group->nsid == PROC_PID_INIT_INO && item->nsid == 0)
+		return true;
+
+	return false;
+}
+
 struct reader_position {
 	const unsigned char *buffer_start;
 	uint32_t max_len;
@@ -210,8 +249,8 @@ struct reader_position {
 	uint32_t end_pos;
 };
 
-static uint32_t parse_log_item(char __user *buf, size_t count,
-	struct reader_position *position, uint32_t *read_off,
+static uint32_t parse_log_item(struct tlogger_reader *reader,
+	char __user *buf, size_t count, struct reader_position *position,
 	bool *user_buffer_left)
 {
 	struct log_item *next_item = NULL;
@@ -224,7 +263,7 @@ static uint32_t parse_log_item(char __user *buf, size_t count,
 	buf_written = 0;
 	buf_left = count;
 
-	con = (!read_off || !position->buffer_start);
+	con = (!position->buffer_start || reader->group == NULL);
 	if (con)
 		return buf_written;
 
@@ -238,21 +277,22 @@ static uint32_t parse_log_item(char __user *buf, size_t count,
 
 		/* copy to user */
 		item_len = next_item->buffer_len + sizeof(*next_item);
-		if (buf_left < item_len) {
-			*user_buffer_left = false;
-			break;
+		if (check_group_compat(reader->group, next_item)) {
+			if (buf_left < item_len) {
+				*user_buffer_left = false;
+				break;
+			}
+
+			if (copy_to_user(buf + buf_written, (void *)next_item, item_len) != 0)
+				tloge("copy failed, item len %u\n", item_len);
+
+			buf_written += item_len;
+			buf_left -= item_len;
 		}
-
 		start_pos += item_len;
-		if (copy_to_user(buf + buf_written,
-			(void *)next_item, item_len) != 0)
-			tloge("copy failed, item len %u\n", item_len);
-
-		buf_written += item_len;
-		buf_left -= item_len;
 	}
 
-	*read_off = start_pos;
+	reader->r_off = start_pos;
 	return buf_written;
 }
 
@@ -333,15 +373,9 @@ static void set_reader_position(struct reader_position *position,
 static ssize_t proc_read_ret(uint32_t buf_written,
 	const struct tlogger_reader *reader)
 {
-	ssize_t ret;
-
-	if (buf_written == 0) {
-		ret = LOG_READ_STATUS_ERROR;
-	} else {
-		ret = buf_written;
-		tlogd("read length %u\n", buf_written);
-		g_last_read_offset = reader->r_off;
-	}
+	ssize_t ret = buf_written;
+	(void)reader;
+	tlogd("read length %u\n", buf_written);
 	return ret;
 }
 
@@ -376,8 +410,7 @@ static ssize_t trigger_parse_log(char __user *buf, size_t count,
 		set_reader_position(&position, log_buffer->buffer_start,
 			buffer_flag->max_len, reader->r_off, log_last_pos);
 
-		buf_written = parse_log_item(buf, count, &position,
-			&reader->r_off, &user_buffer_left);
+		buf_written = parse_log_item(reader, buf, count, &position, &user_buffer_left);
 
 		return proc_read_ret(buf_written, reader);
 	}
@@ -392,16 +425,14 @@ static ssize_t trigger_parse_log(char __user *buf, size_t count,
 	set_reader_position(&position, log_buffer->buffer_start,
 		buffer_flag->max_len, reader->r_off, buffer_flag->max_len);
 
-	buf_written = parse_log_item(buf, count, &position,
-		&reader->r_off, &user_buffer_left);
+	buf_written = parse_log_item(reader, buf, count, &position, &user_buffer_left);
 
 	if (count > buf_written && user_buffer_left) {
 		set_reader_position(&position, log_buffer->buffer_start,
 			buffer_flag->max_len, 0, log_last_pos);
 
-		buf_written += parse_log_item(buf + buf_written,
-			count - buf_written, &position,
-			&reader->r_off, &user_buffer_left);
+		buf_written += parse_log_item(reader, buf + buf_written,
+			count - buf_written, &position, &user_buffer_left);
 
 		reader->r_loops = buffer_flag->write_loops;
 	}
@@ -443,6 +474,7 @@ static ssize_t process_tlogger_read(struct file *file,
 void tz_log_write(void)
 {
 	struct log_buffer *log_buffer = NULL;
+	struct tlogger_reader *reader = NULL;
 
 	if (!g_log)
 		return;
@@ -451,12 +483,53 @@ void tz_log_write(void)
 	if (!log_buffer)
 		return;
 
-	if (g_last_read_offset != log_buffer->flag.last_pos) {
-		tlogd("wake up write tz log\n");
-		wake_up_interruptible(&g_log->wait_queue_head);
+	mutex_lock(&g_log->mutex_log_chnl);
+	list_for_each_entry(reader, &g_log->readers, list) {
+		if (reader->r_off != log_buffer->flag.last_pos) {
+			tlogd("wake up write tz log\n");
+			wake_up_interruptible(&reader->wait_queue_head);
+		}
 	}
+	mutex_unlock(&g_log->mutex_log_chnl);
 
 	return;
+}
+
+#ifdef CONFIG_TEE_REBOOT
+void recycle_tlogcat_processes(void)
+{
+	struct log_buffer *log_buffer = NULL;
+	struct tlogger_reader *reader = NULL;
+
+	if (g_log == NULL)
+		return;
+
+	log_buffer = (struct log_buffer *)g_log->buffer_info;
+	if (log_buffer == NULL)
+		return;
+
+	mutex_lock(&g_log->mutex_log_chnl);
+	list_for_each_entry(reader, &g_log->readers, list)
+		kill_pid(reader->pid, SIGKILL, 1);
+	mutex_unlock(&g_log->mutex_log_chnl);
+}
+#endif
+
+static struct tlogger_group *get_tlogger_group(void)
+{
+	struct tlogger_group *group = NULL;
+#ifdef CONFIG_CONFIDENTIAL_CONTAINER
+	uint32_t nsid = task_active_pid_ns(current)->ns.inum;
+#else
+	uint32_t nsid = PROC_PID_INIT_INO;
+#endif
+
+	list_for_each_entry(group, &g_reader_group_list, node) {
+		if (group->nsid == nsid)
+			return group;
+	}
+
+	return NULL;
 }
 
 static struct tlogger_log *get_tlogger_log_by_minor(int minor)
@@ -471,12 +544,45 @@ static struct tlogger_log *get_tlogger_log_by_minor(int minor)
 	return NULL;
 }
 
+static void init_tlogger_reader(struct tlogger_reader *reader, struct tlogger_log *log, struct tlogger_group *group)
+{
+	reader->log = log;
+	reader->group = group;
+
+	get_task_struct(current);
+	reader->pid = get_task_pid(current, PIDTYPE_PID);
+	put_task_struct(current);
+
+	reader->r_all = true;
+	reader->r_off = 0;
+	reader->r_loops = 0;
+	reader->r_sn = 0;
+	reader->r_failtimes = 0;
+	reader->r_is_tlogf = 0;
+	reader->r_from_cur = 0;
+
+	INIT_LIST_HEAD(&reader->list);
+	init_waitqueue_head(&reader->wait_queue_head);
+}
+
+static void init_tlogger_group(struct tlogger_group *group)
+{
+	group->reader_cnt = 1;
+#ifdef CONFIG_CONFIDENTIAL_CONTAINER
+	group->nsid = task_active_pid_ns(current)->ns.inum;
+#else
+	group->nsid = PROC_PID_INIT_INO;
+#endif
+	group->tlogf_stat = 0;
+}
+
 static int process_tlogger_open(struct inode *inode,
 	struct file *file)
 {
 	struct tlogger_log *log = NULL;
 	int ret;
 	struct tlogger_reader *reader = NULL;
+	struct tlogger_group *group = NULL;
 
 	tlogd("open logger open ++\n");
 	/* not support seek */
@@ -489,25 +595,37 @@ static int process_tlogger_open(struct inode *inode,
 	if (!log)
 		return -ENODEV;
 
+	mutex_lock(&g_reader_group_mutex);
+	group = get_tlogger_group();
+	if (group == NULL) {
+		group = kzalloc(sizeof(*group), GFP_KERNEL);
+		if (ZERO_OR_NULL_PTR((unsigned long)(uintptr_t)group)) {
+			mutex_unlock(&g_reader_group_mutex);
+			return -ENOMEM;
+		}
+		init_tlogger_group(group);
+		list_add_tail(&group->node, &g_reader_group_list);
+	} else {
+		group->reader_cnt++;
+	}
+	mutex_unlock(&g_reader_group_mutex);
+
 	reader = kmalloc(sizeof(*reader), GFP_KERNEL);
-	if (ZERO_OR_NULL_PTR((unsigned long)(uintptr_t)reader))
+	if (ZERO_OR_NULL_PTR((unsigned long)(uintptr_t)reader)) {
+		mutex_lock(&g_reader_group_mutex);
+		if (--group->reader_cnt == 0) {
+			list_del(&group->node);
+			kfree(group);
+		}
+		mutex_unlock(&g_reader_group_mutex);
 		return -ENOMEM;
+	}
+	init_tlogger_reader(reader, log, group);
 
-	reader->log = log;
-	reader->r_all = true;
-	reader->r_off = 0;
-	reader->r_loops = 0;
-	reader->r_sn = 0;
-	reader->r_failtimes = 0;
-	reader->r_is_tlogf = 0;
-	reader->r_from_cur = 0;
-
-	INIT_LIST_HEAD(&reader->list);
-
-	mutex_lock(&log->mutex_info);
+	mutex_lock(&log->mutex_log_chnl);
 	list_add_tail(&reader->list, &log->readers);
 	g_tlogcat_count++;
-	mutex_unlock(&log->mutex_info);
+	mutex_unlock(&log->mutex_log_chnl);
 
 	file->private_data = reader;
 	tlogd("tlogcat count %u\n", g_tlogcat_count);
@@ -519,6 +637,7 @@ static int process_tlogger_release(struct inode *ignored,
 {
 	struct tlogger_reader *reader = NULL;
 	struct tlogger_log *log = NULL;
+	struct tlogger_group *group = NULL;
 
 	(void)ignored;
 
@@ -539,15 +658,23 @@ static int process_tlogger_release(struct inode *ignored,
 		return -1;
 	}
 
-	mutex_lock(&log->mutex_info);
+	mutex_lock(&log->mutex_log_chnl);
 	list_del(&reader->list);
 	if (g_tlogcat_count >= 1)
 		g_tlogcat_count--;
-	mutex_unlock(&log->mutex_info);
+	mutex_unlock(&log->mutex_log_chnl);
 
-	tlogd("logger_release r_is_tlogf-%u\n", reader->r_is_tlogf);
-	if (reader->r_is_tlogf != 0)
-		g_tlogcat_f = 0;
+	group = reader->group;
+	if (group != NULL) {
+		mutex_lock(&g_reader_group_mutex);
+		if (reader->r_is_tlogf != 0)
+			group->tlogf_stat = 0;
+		if (--group->reader_cnt == 0) {
+			list_del(&group->node);
+			kfree(group);
+		}
+		mutex_unlock(&g_reader_group_mutex);
+	}
 
 	kfree(reader);
 	tlogd("tlogcat count %u\n", g_tlogcat_count);
@@ -586,7 +713,7 @@ static unsigned int process_tlogger_poll(struct file *file,
 		return ret;
 	}
 
-	poll_wait(file, &log->wait_queue_head, wait);
+	poll_wait(file, &reader->wait_queue_head, wait);
 
 	if (buffer->flag.last_pos != reader->r_off)
 		ret |= POLLIN | POLLRDNORM;
@@ -622,24 +749,46 @@ static void set_tlogcat_f_stat(const struct file *file)
 {
 	struct tlogger_reader *reader = NULL;
 
-	if (!file)
+	if (file == NULL) {
 		return;
+	}
 
 	reader = file->private_data;
-	if (!reader)
+	if (reader == NULL) {
 		return;
+	}
 
 	reader->r_is_tlogf = 1;
-	g_tlogcat_f = 1;
+	if (reader->group != NULL) {
+		mutex_lock(&g_reader_group_mutex);
+		reader->group->tlogf_stat = 1;
+		mutex_unlock(&g_reader_group_mutex);
+	}
 
-	tlogi("set tlogcat_f-%d\n", g_tlogcat_f);
 	return;
 }
 
-static int get_tlogcat_f_stat(void)
+static int get_tlogcat_f_stat(const struct file *file)
 {
-	tlogi("get tlogcat_f-%d\n", g_tlogcat_f);
-	return g_tlogcat_f;
+	struct tlogger_reader *reader = NULL;
+	int tlogf_stat = 0;
+
+	if (file == NULL) {
+		return tlogf_stat;
+	}
+
+	reader = file->private_data;
+	if (reader == NULL) {
+		return tlogf_stat;
+	}
+
+	if (reader->group != NULL) {
+		mutex_lock(&g_reader_group_mutex);
+		tlogf_stat = reader->group->tlogf_stat;
+		mutex_unlock(&g_reader_group_mutex);
+	}
+
+	return tlogf_stat;
 }
 
 static int check_user_arg(unsigned long arg, size_t arg_len)
@@ -711,7 +860,10 @@ static long process_tlogger_ioctl(struct file *file,
 		ret = 0;
 		break;
 	case TEELOGGER_GET_TLOGCAT_STAT:
-		ret = get_tlogcat_f_stat();
+		ret = get_tlogcat_f_stat(file);
+		break;
+	case TEELOGGER_GET_TEE_INFO:
+		ret = tc_ns_get_tee_info(file, (void *)(uintptr_t)arg);
 		break;
 	default:
 		tloge("ioctl error default\n");
@@ -753,7 +905,7 @@ static int __init register_device(const char *log_name,
 	(void)size;
 
 	log = kzalloc(sizeof(*log), GFP_KERNEL);
-	if (!log) {
+	if (ZERO_OR_NULL_PTR((unsigned long)(uintptr_t)log)) {
 		tloge("kzalloc is failed\n");
 		return -ENOMEM;
 	}
@@ -768,9 +920,9 @@ static int __init register_device(const char *log_name,
 	log->misc_device.fops = &g_logger_fops;
 	log->misc_device.parent = NULL;
 
-	init_waitqueue_head(&log->wait_queue_head);
 	INIT_LIST_HEAD(&log->readers);
 	mutex_init(&log->mutex_info);
+	mutex_init(&log->mutex_log_chnl);
 	INIT_LIST_HEAD(&log->logs);
 	list_add_tail(&log->logs, &m_log_list);
 
@@ -826,15 +978,13 @@ static struct log_item *msg_get_next(unsigned char *buffer_start,
 
 #ifdef CONFIG_TZDRIVER_MODULE
 /* there is no way to chown in kernel-5.10 for ko */
-static int tlogger_chown(const char *file_path, uint32_t file_path_len)
+static void tlogger_chown(const char *file_path, uint32_t file_path_len)
 {
 	(void)file_path;
 	(void)file_path_len;
-
-	return 0;
 }
 #else
-static int tlogger_chown(const char *file_path, uint32_t file_path_len)
+static void tlogger_chown(const char *file_path, uint32_t file_path_len)
 {
 	(void)file_path_len;
 	uid_t user = ROOT_UID;
@@ -846,7 +996,7 @@ static int tlogger_chown(const char *file_path, uint32_t file_path_len)
 
 	/* not need modify chown attr */
 	if (group == ROOT_GID && user == ROOT_UID)
-		return 0;
+		return;
 
 	old_fs = get_fs();
 	set_fs(KERNEL_DS);
@@ -855,14 +1005,10 @@ static int tlogger_chown(const char *file_path, uint32_t file_path_len)
 #else
 	ret = (int)sys_chown((const char __user *)file_path, user, group);
 #endif
-	if (ret != 0) {
-		tloge("sys chown for last teemsg file error\n");
-		set_fs(old_fs);
-		return -1;
-	}
+	if (ret != 0)
+		tloge("sys chown for last teemsg file error %d\n", ret);
 
 	set_fs(old_fs);
-	return 0;
 }
 #endif
 
@@ -1096,9 +1242,7 @@ int tlogger_store_msg(const char *file_path, uint32_t file_path_len)
 	if (ret != 0)
 		goto free_res;
 
-	ret = tlogger_chown(file_path, file_path_len);
-	if (ret != 0)
-		goto free_res;
+	tlogger_chown(file_path, file_path_len);
 
 	ret = write_version_to_msg(filep, &pos);
 	if (ret != 0)
@@ -1106,6 +1250,10 @@ int tlogger_store_msg(const char *file_path, uint32_t file_path_len)
 
 	ret = write_log_to_msg(filep, buffer, buffer_max_len,
 		&pos, read_start, read_end);
+
+#ifdef CONFIG_TEE_LOG_DUMP_PATH
+	g_last_read_offset = ((struct log_buffer*)g_log->buffer_info)->flag.last_pos;
+#endif
 
 free_res:
 	if (buffer) {
@@ -1156,7 +1304,7 @@ int register_mem_to_teeos(uint64_t mem_addr, uint32_t mem_len, bool is_cache_mem
 		(uint64_t)mailbox_virt_to_phys((uintptr_t)&mb_pack->operation) >> ADDR_TRANS_NUM;
 
 	if (is_tee_rebooting())
-		ret = send_smc_cmd_rebooting(TSP_REQUEST, 0, 0, &smc_cmd);
+		ret = send_smc_cmd_rebooting(TSP_REQUEST, &smc_cmd);
 	else
 		ret = tc_ns_smc(&smc_cmd);
 
@@ -1221,7 +1369,7 @@ static int register_tloger_device(void)
 {
 	int ret;
 
-	tlogi("tlogcat version 1.0.0\n");
+	tlogi("tlogcat version %d.%d\n", TZDRIVER_LEVEL_MAJOR_SELF, TZDRIVER_LEVEL_MINOR_SELF);
 	ret = register_device(LOGGER_LOG_TEEOS, (uintptr_t)g_log_buffer,
 		sizeof(*g_log_buffer) + g_log_buffer->flag.max_len);
 	if (ret != 0) {
@@ -1300,5 +1448,5 @@ module_exit(free_tlogger_service);
 
 MODULE_AUTHOR("iTrustee");
 MODULE_DESCRIPTION("TrustCore Logger");
-MODULE_VERSION("1.00");
+MODULE_VERSION("3.00");
 #endif

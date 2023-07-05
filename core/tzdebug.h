@@ -1,7 +1,7 @@
 /*
- * tz_spi_notify.h
+ * tzdebug.h
  *
- * exported funcs for spi interrupt actions
+ * function for find symbols not exported
  *
  * Copyright (c) 2012-2022 Huawei Technologies Co., Ltd.
  *
@@ -15,14 +15,29 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  */
-#ifndef TZ_SPI_NOTIFY_H
-#define TZ_SPI_NOTIFY_H
-#include <linux/platform_device.h>
-#include <linux/cdev.h>
-#include "teek_ns_client.h"
+#ifndef TZDEBUG_H
+#define TZDEBUG_H
 
-int tz_spi_init(struct device *class_dev, struct device_node *np);
-void free_tz_spi(struct device *class_dev);
-int send_notify_cmd(unsigned int cmd_id);
+#include <linux/types.h>
+struct ta_mem {
+	char ta_name[64];
+	uint32_t pmem;
+	uint32_t pmem_max;
+	uint32_t pmem_limit;
+};
+#define MEMINFO_TA_MAX 100
+struct tee_mem {
+	uint32_t total_mem;
+	uint32_t pmem;
+	uint32_t free_mem;
+	uint32_t free_mem_min;
+	uint32_t ta_num;
+	struct ta_mem ta_mem_info[MEMINFO_TA_MAX];
+};
+
+int get_tee_meminfo(struct tee_mem *meminfo);
+void tee_dump_mem(void);
+int tzdebug_init(void);
+void free_tzdebug(void);
 
 #endif

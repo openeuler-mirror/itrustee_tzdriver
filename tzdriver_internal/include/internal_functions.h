@@ -28,13 +28,6 @@ static inline int tc_ns_register_ion_mem(void)
 }
 #endif
 
-#ifndef CONFIG_HISI_VLTMM
-static inline void vltmm_agent_register(void)
-{
-	return;
-}
-#endif
-
 #ifndef CONFIG_TEE_FAULT_MANAGER
 static inline void fault_monitor_start(int32_t type)
 {
@@ -92,7 +85,7 @@ static inline void kill_ion_by_uuid(const struct tc_uuid *uuid)
 }
 #endif
 
-#ifndef CONFIG_ION_HISI
+#ifndef CONFIG_ION_MM
 static inline int alloc_for_ion(const struct tc_call_params *call_params,
 	struct tc_op_params *op_params, uint8_t kernel_params,
 	uint32_t param_type, unsigned int index)
@@ -107,7 +100,7 @@ static inline int alloc_for_ion(const struct tc_call_params *call_params,
 }
 #endif
 
-#ifndef CONFIG_ION_HISI_SECSG
+#ifndef CONFIG_ION_MM_SECSG
 static inline int alloc_for_ion_sglist(const struct tc_call_params *call_params,
 	struct tc_op_params *op_params, uint8_t kernel_params,
 	uint32_t param_type, unsigned int index)
@@ -142,9 +135,6 @@ static inline void tz_workqueue_bind_mask(struct workqueue_struct *wq,
 }
 #endif
 
-#ifdef CONFIG_TEE_TUI
-#include "tui.h"
-#else
 static inline bool is_tui_agent(unsigned int agent_id)
 {
 	(void)agent_id;
@@ -204,11 +194,7 @@ static inline int tc_ns_tui_event(struct tc_ns_dev_file *dev_file, const void *a
 	(void)argp;
 	return 0;
 }
-#endif
 
-#ifdef CONFIG_LIVEPATCH_ENABLE
-#include "livepatch_cmd.h"
-#else
 static inline int livepatch_init(const struct device *dev)
 {
 	(void)dev;
@@ -223,7 +209,6 @@ static inline void livepatch_up_read_sem(void)
 static inline void free_livepatch(void)
 {
 }
-#endif
 
 #ifdef CONFIG_TEE_TRACE
 #include "tee_trace_event.h"
@@ -261,6 +246,22 @@ static inline void free_reboot_thread(void)
 {
 	return;
 }
+#endif
+
+
+#ifdef CONFIG_KBOX_MEM
+#include "kbox.h"
+#else
+static inline void kbox_report(int32_t type, const uint8_t *ta_uuid, uint32_t uuid_len)
+{
+	(void)type;
+	(void)ta_uuid;
+	(void)uuid_len;
+}
+#endif
+
+#if defined(DYNAMIC_DRV_DIR) || defined(DYNAMIC_CRYPTO_DRV_DIR) || defined(DYNAMIC_SRV_DIR)
+#include "tz_load_dynamic.h"
 #endif
 
 #endif

@@ -43,7 +43,7 @@ struct tc_ns_session *tc_find_session_withowner(
 	const struct list_head *session_list, unsigned int session_id,
 	const struct tc_ns_dev_file *dev_file);
 int tc_ns_load_secfile(struct tc_ns_dev_file *dev_file,
-	void __user *argp, bool is_from_client_node);
+	void __user *argp, const struct load_secfile_ioctl_struct *k_argp, bool is_from_client_node);
 int load_image(struct load_img_params *params,
 	struct sec_file_info *sec_file_info, struct tc_ns_client_return *tee_ret);
 void get_service_struct(struct tc_ns_service *service);

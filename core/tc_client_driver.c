@@ -45,6 +45,7 @@
 #include <linux/thread_info.h>
 #include <linux/highmem.h>
 #include <linux/mm.h>
+#include <linux/proc_ns.h>
 #include <linux/kernel.h>
 #include <linux/file.h>
 #include <linux/err.h>
@@ -72,17 +73,34 @@
 #include "client_hash_auth.h"
 #include "auth_base_impl.h"
 #include "tlogger.h"
+#include "tzdebug.h"
 #include "session_manager.h"
 #include "internal_functions.h"
 #include "ko_adapt.h"
 #include "tz_pm.h"
 #include "reserved_mempool.h"
+#ifdef CONFIG_TEE_REBOOT
+#include "reboot.h"
+#endif
+
+#ifdef CONFIG_FFA_SUPPORT
+#include "ffa_abi.h"
+#endif
+
+#ifdef CONFIG_TEE_TELEPORT_SUPPORT
+#include "tee_portal.h"
+#endif
+
+#include "tee_info.h"
 
 static struct class *g_driver_class;
 static struct device_node *g_dev_node;
 
 struct dev_node g_tc_client;
 struct dev_node g_tc_private;
+#if defined(CONFIG_CONFIDENTIAL_CONTAINER) || defined(CONFIG_TEE_TELEPORT_SUPPORT)
+struct dev_node g_tc_cvm;
+#endif
 
 #ifdef CONFIG_ACPI
 static int g_acpi_irq;
@@ -95,10 +113,45 @@ static DEFINE_MUTEX(g_set_ca_hash_lock);
 /* dev node list and itself has mutex to avoid race */
 struct tc_ns_dev_list g_tc_ns_dev_list;
 
+static bool g_init_succ = false;
+
+static void set_tz_init_flag(void)
+{
+	g_init_succ = true;
+}
+
+static void clear_tz_init_flag(void)
+{
+	g_init_succ = false;
+}
+
+bool get_tz_init_flag(void)
+{
+	return g_init_succ;
+}
 
 struct tc_ns_dev_list *get_dev_list(void)
 {
 	return &g_tc_ns_dev_list;
+}
+
+int tc_ns_register_host_nsid(void)
+{
+	struct tc_ns_smc_cmd smc_cmd = {{0}, 0};
+	int ret = 0;
+	smc_cmd.cmd_type = CMD_TYPE_GLOBAL;
+	smc_cmd.cmd_id = GLOBAL_CMD_ID_REGISTER_HOST_NSID;
+
+	if (is_tee_rebooting())
+		ret = send_smc_cmd_rebooting(TSP_REQUEST, &smc_cmd);
+	else
+		ret = tc_ns_smc(&smc_cmd);
+
+	if (ret != 0) {
+		ret = -EPERM;
+		tloge("smc call return error ret 0x%x\n", smc_cmd.ret_val);
+	}
+	return ret;
 }
 
 static int tc_ns_get_tee_version(const struct tc_ns_dev_file *dev_file,
@@ -201,7 +254,7 @@ static int get_public_key(struct tc_ns_dev_file *dev_file,
 	return 0;
 }
 
-static bool is_cert_buffer_size_valid(int cert_buffer_size)
+static bool is_cert_buffer_size_valid(unsigned int cert_buffer_size)
 {
 	/*
 	 * GET PACKAGE NAME AND APP CERTIFICATE:
@@ -369,6 +422,9 @@ int tc_ns_client_open(struct tc_ns_dev_file **dev_file, uint8_t kernel_api)
 	mutex_init(&dev->cainfo_hash_setup_lock);
 #endif
 	init_completion(&dev->close_comp);
+#ifdef CONFIG_TEE_TELEPORT_SUPPORT
+	dev->portal_enabled = false;
+#endif
 	*dev_file = dev;
 
 	return 0;
@@ -580,6 +636,18 @@ static int tc_client_mmap(struct file *filp, struct vm_area_struct *vma)
 	return ret;
 }
 
+static uint32_t get_nsid(void)
+{
+	uint32_t nsid;
+
+#ifdef CONFIG_CONFIDENTIAL_CONTAINER
+	nsid = task_active_pid_ns(current)->ns.inum;
+#else
+	nsid = PROC_PID_INIT_INO;
+#endif
+	return nsid;
+}
+
 static int ioctl_register_agent(struct tc_ns_dev_file *dev_file, unsigned long arg)
 {
 	int ret;
@@ -605,56 +673,64 @@ static int ioctl_register_agent(struct tc_ns_dev_file *dev_file, unsigned long a
 	return ret;
 }
 
-static int ioctl_unregister_agent(const struct tc_ns_dev_file *dev_file,
-	unsigned long arg)
+static int ioctl_check_agent_owner(const struct tc_ns_dev_file *dev_file,
+	unsigned int agent_id, unsigned int nsid)
 {
-	int ret;
 	struct smc_event_data *event_data = NULL;
 
-	event_data = find_event_control((unsigned int)arg);
-	if (!event_data) {
+	event_data = find_event_control(agent_id, nsid);
+	if (event_data == NULL) {
 		tloge("invalid agent id\n");
 		return -EINVAL;
 	}
 
 	if (event_data->owner != dev_file) {
-		tloge("invalid unregister request\n");
+		tloge("invalid request, access denied!\n");
 		put_agent_event(event_data);
-		return -EINVAL;
+		return -EPERM;
 	}
 
 	put_agent_event(event_data);
-	ret = tc_ns_unregister_agent((unsigned int)arg);
-
-	return ret;
+	return 0;
 }
 
 /* ioctls for the secure storage daemon */
-static int public_ioctl(const struct file *file, unsigned int cmd, unsigned long arg, bool is_from_client_node)
+int public_ioctl(const struct file *file, unsigned int cmd, unsigned long arg, bool is_from_client_node)
 {
 	int ret = -EINVAL;
-	struct tc_ns_dev_file *dev_file = file->private_data;
+	struct tc_ns_dev_file *dev_file = NULL;
+	uint32_t nsid = get_nsid();
 	void *argp = (void __user *)(uintptr_t)arg;
-	if (!dev_file) {
+	if (file == NULL || file->private_data == NULL) {
 		tloge("invalid params\n");
 		return -EINVAL;
 	}
+	dev_file = file->private_data;
+#ifdef CONFIG_CONFIDENTIAL_CONTAINER
+	dev_file->nsid = nsid;
+#endif
 
 	switch (cmd) {
 	case TC_NS_CLIENT_IOCTL_WAIT_EVENT:
-		ret = tc_ns_wait_event((unsigned int)arg);
+		if (ioctl_check_agent_owner(dev_file, (unsigned int)arg, nsid) != 0)
+			return -EINVAL;
+		ret = tc_ns_wait_event((unsigned int)arg, nsid);
 		break;
 	case TC_NS_CLIENT_IOCTL_SEND_EVENT_RESPONSE:
-		ret = tc_ns_send_event_response((unsigned int)arg);
+		if (ioctl_check_agent_owner(dev_file, (unsigned int)arg, nsid) != 0)
+			return -EINVAL;
+		ret = tc_ns_send_event_response((unsigned int)arg, nsid);
 		break;
 	case TC_NS_CLIENT_IOCTL_REGISTER_AGENT:
 		ret = ioctl_register_agent(dev_file, arg);
 		break;
 	case TC_NS_CLIENT_IOCTL_UNREGISTER_AGENT:
-		ret = ioctl_unregister_agent(dev_file, arg);
+		if (ioctl_check_agent_owner(dev_file, (unsigned int)arg, nsid) != 0)
+			return -EINVAL;
+		ret = tc_ns_unregister_agent((unsigned int)arg, nsid);
 		break;
 	case TC_NS_CLIENT_IOCTL_LOAD_APP_REQ:
-		ret = tc_ns_load_secfile(file->private_data, argp, is_from_client_node);
+		ret = tc_ns_load_secfile(file->private_data, argp, NULL, is_from_client_node);
 		break;
 	default:
 		tloge("invalid cmd!");
@@ -693,10 +769,10 @@ static int get_agent_id(unsigned long arg, unsigned int cmd, uint32_t *agent_id)
 	switch (cmd) {
 	case TC_NS_CLIENT_IOCTL_WAIT_EVENT:
 	case TC_NS_CLIENT_IOCTL_SEND_EVENT_RESPONSE:
+	case TC_NS_CLIENT_IOCTL_UNREGISTER_AGENT:
 		*agent_id = (unsigned int)arg;
 		break;
 	case TC_NS_CLIENT_IOCTL_REGISTER_AGENT:
-	case TC_NS_CLIENT_IOCTL_UNREGISTER_AGENT:
 		if (copy_from_user(&args, (void *)(uintptr_t)arg, sizeof(args)) != 0) {
 			tloge("copy agent args failed\n");
 			return -EFAULT;
@@ -736,14 +812,14 @@ static int tc_client_agent_ioctl(const struct file *file, unsigned int cmd,
 	return ret;
 }
 
-static void handle_cmd_prepare(unsigned int cmd)
+void handle_cmd_prepare(unsigned int cmd)
 {
 	if (cmd != TC_NS_CLIENT_IOCTL_WAIT_EVENT &&
 		cmd != TC_NS_CLIENT_IOCTL_SEND_EVENT_RESPONSE)
 		livepatch_down_read_sem();
 }
 
-static void handle_cmd_finish(unsigned int cmd)
+void handle_cmd_finish(unsigned int cmd)
 {
 	if (cmd != TC_NS_CLIENT_IOCTL_WAIT_EVENT &&
 		cmd != TC_NS_CLIENT_IOCTL_SEND_EVENT_RESPONSE)
@@ -759,6 +835,9 @@ static long tc_private_ioctl(struct file *file, unsigned int cmd,
 	switch (cmd) {
 	case TC_NS_CLIENT_IOCTL_GET_TEE_VERSION:
 		ret = tc_ns_get_tee_version(file->private_data, argp);
+		break;
+	case TC_NS_CLIENT_IOCTL_GET_TEE_INFO:
+		ret = tc_ns_get_tee_info(file, argp);
 		break;
 	case TC_NS_CLIENT_IOCTL_SET_NATIVECA_IDENTITY:
 		mutex_lock(&g_set_ca_hash_lock);
@@ -801,9 +880,6 @@ static long tc_client_ioctl(struct file *file, unsigned int cmd,
 	case TC_NS_CLIENT_IOCTL_LOGIN:
 		ret = tc_ns_client_login_func(file->private_data, argp);
 		break;
-	case TC_NS_CLIENT_IOCTL_TST_CMD_REQ:
-		ret = tc_ns_tst_cmd(argp);
-		break;
 	case TC_NS_CLIENT_IOCTL_LOAD_APP_REQ:
 		ret = public_ioctl(file, cmd, arg, true);
 		break;
@@ -834,7 +910,9 @@ static int tc_client_open(struct inode *inode, struct file *file)
 	ret = tc_ns_client_open(&dev, TEE_REQ_FROM_USER_MODE);
 	if (ret == 0)
 		file->private_data = dev;
-
+#ifdef CONFIG_TEE_REBOOT
+	get_teecd_pid();
+#endif
 	return ret;
 }
 
@@ -860,7 +938,7 @@ static int tc_private_close(struct inode *inode, struct file *file)
 	/* for teecd close fd */
 	if (is_system_agent(dev)) {
 		/* for teecd agent close fd */
-		send_event_response_single(dev);
+		send_crashed_event_response_single(dev);
 		free_dev(dev);
 	} else {
 		/* for ca damon close fd */
@@ -1022,13 +1100,13 @@ static int create_dev_node(struct dev_node *node)
 		return -EFAULT;
 	}
 	if (alloc_chrdev_region(&(node->devt), 0, 1,
-				node->node_name) != 0) {
+		node->node_name) != 0) {
 		tloge("alloc chrdev region failed");
 		ret = -EFAULT;
 		return ret;
 	}
 	node->class_dev = device_create(node->driver_class, NULL, node->devt,
-			NULL, node->node_name);
+		NULL, node->node_name);
 	if (IS_ERR_OR_NULL(node->class_dev)) {
 		tloge("class device create failed");
 		ret = -ENOMEM;
@@ -1047,7 +1125,7 @@ chrdev_region_unregister:
 }
 
 static int init_dev_node(struct dev_node *node, char *node_name,
-			struct class *driver_class, const struct file_operations *fops)
+	struct class *driver_class, const struct file_operations *fops)
 {
 	int ret = -1;
 	if (!node) {
@@ -1074,19 +1152,30 @@ static int enable_dev_nodes(void)
 	int ret;
 
 	ret = cdev_add(&(g_tc_private.char_dev),
-			MKDEV(MAJOR(g_tc_private.devt), 0), 1);
+		MKDEV(MAJOR(g_tc_private.devt), 0), 1);
 	if (ret < 0) {
 		tloge("cdev add failed %d", ret);
 		return ret;
 	}
 
 	ret = cdev_add(&(g_tc_client.char_dev),
-			MKDEV(MAJOR(g_tc_client.devt), 0), 1);
+		MKDEV(MAJOR(g_tc_client.devt), 0), 1);
 	if (ret < 0) {
 		tloge("cdev add failed %d", ret);
 		cdev_del(&(g_tc_private.char_dev));
 		return ret;
 	}
+
+#if defined(CONFIG_CONFIDENTIAL_CONTAINER) || defined(CONFIG_TEE_TELEPORT_SUPPORT)
+	ret = cdev_add(&(g_tc_cvm.char_dev),
+				MKDEV(MAJOR(g_tc_cvm.devt), 0), 1);
+	if (ret < 0) {
+		tloge("cdev add failed %d", ret);
+		cdev_del(&(g_tc_client.char_dev));
+		cdev_del(&(g_tc_private.char_dev));
+		return ret;
+	}
+#endif
 	return 0;
 }
 
@@ -1122,6 +1211,16 @@ static int tc_ns_client_init(void)
 		class_destroy(g_driver_class);
 		goto unmap_res_mem;
 	}
+
+#if defined(CONFIG_CONFIDENTIAL_CONTAINER) || defined(CONFIG_TEE_TELEPORT_SUPPORT)
+	ret = init_dev_node(&g_tc_cvm, TC_NS_CVM_DEV, g_driver_class, get_cvm_fops());
+	if (ret != 0) {
+		destory_dev_node(&g_tc_private, g_driver_class);
+		destory_dev_node(&g_tc_client, g_driver_class);
+		class_destroy(g_driver_class);
+		goto unmap_res_mem;
+	}
+#endif
 
 	INIT_LIST_HEAD(&g_tc_ns_dev_list.dev_file_list);
 	mutex_init(&g_tc_ns_dev_list.dev_lock);
@@ -1166,6 +1265,13 @@ static int tc_teeos_init(struct device *class_dev)
 		tloge("tz spi init failed\n");
 		goto release_mempool;
 	}
+
+	ret = tc_ns_register_host_nsid();
+	if (ret != 0) {
+		tloge("failed to register host nsid\n");
+		goto release_mempool;
+	}
+
 	return 0;
 release_mempool:
 	free_mailbox_mempool();
@@ -1192,6 +1298,8 @@ static void tc_re_init(const struct device *class_dev)
 	if (ret != 0)
 		tloge("tlogger init failed\n");
 #endif
+	if (tzdebug_init() != 0)
+		tloge("tzdebug init failed\n");
 
 	ret = init_tui(class_dev);
 	if (ret != 0)
@@ -1209,16 +1317,6 @@ static void tc_re_init(const struct device *class_dev)
 		ret = -EFAULT;
 	}
 
-#ifdef CONFIG_LIVEPATCH_ENABLE
-	/*
-	 * access this sys node only after this function is initialized
-	 */
-	if (livepatch_init(class_dev)) {
-		tloge("livepatch init failed\n");
-		ret = -EFAULT;
-	}
-#endif
-
 	if (ret != 0)
 		tloge("Caution! Running environment init failed!\n");
 }
@@ -1231,6 +1329,11 @@ static __init int tc_init(void)
 	ret = tc_ns_client_init();
 	if (ret != 0)
 		return ret;
+
+#ifdef CONFIG_FFA_SUPPORT
+	ffa_abi_register();
+#endif
+
 	ret = tc_teeos_init(g_tc_client.class_dev);
 	if (ret != 0) {
 		tloge("tc teeos init failed\n");
@@ -1238,6 +1341,10 @@ static __init int tc_init(void)
 	}
 	/* run-time environment init failure don't block tzdriver init proc */
 	tc_re_init(g_tc_client.class_dev);
+
+#ifdef CONFIG_TEE_TELEPORT_SUPPORT
+	tee_portal_init();
+#endif
 
 	/*
 	 * Note: the enable_dev_nodes function must be called
@@ -1248,9 +1355,17 @@ static __init int tc_init(void)
 		tloge("enable dev nodes failed\n");
 		goto class_device_destroy;
 	}
+
+	set_tz_init_flag();
+#if defined(DYNAMIC_DRV_DIR) || defined(DYNAMIC_CRYPTO_DRV_DIR) || defined(DYNAMIC_SRV_DIR)
+	tz_load_dynamic_dir();
+#endif
 	return 0;
 
 class_device_destroy:
+#if defined(CONFIG_CONFIDENTIAL_CONTAINER) || defined(CONFIG_TEE_TELEPORT_SUPPORT)
+	destory_dev_node(&g_tc_cvm, g_driver_class);
+#endif
 	destory_dev_node(&g_tc_client, g_driver_class);
 	destory_dev_node(&g_tc_private, g_driver_class);
 	class_destroy(g_driver_class);
@@ -1273,10 +1388,14 @@ static void free_dev_list(void)
 static void tc_exit(void)
 {
 	tlogi("tz client exit");
+	clear_tz_init_flag();
 	/*
 	 * You should first execute "cdev_del" to 
 	 * prevent access to the device node when uninstalling "tzdriver".
 	 */
+#if defined(CONFIG_CONFIDENTIAL_CONTAINER) || defined(CONFIG_TEE_TELEPORT_SUPPORT)
+	cdev_del(&(g_tc_cvm.char_dev));
+#endif
 	cdev_del(&(g_tc_private.char_dev));
 	cdev_del(&(g_tc_client.char_dev));
 	free_agent();
@@ -1284,6 +1403,10 @@ static void tc_exit(void)
 	free_tui();
 	free_tz_spi(g_tc_client.class_dev);
 	/* run-time environment exit should before teeos exit */
+#if defined(CONFIG_CONFIDENTIAL_CONTAINER) || defined(CONFIG_TEE_TELEPORT_SUPPORT)
+	destory_dev_node(&g_tc_cvm, g_driver_class);
+#endif
+
 	destory_dev_node(&g_tc_client, g_driver_class);
 	destory_dev_node(&g_tc_private, g_driver_class);
 	platform_driver_unregister(&g_tz_platform_driver);
@@ -1291,6 +1414,7 @@ static void tc_exit(void)
 	free_smc_data();
 	free_event_mem();
 #ifdef CONFIG_TZDRIVER_MODULE
+	free_tzdebug();
 	free_tlogger_service();
 #endif
 	free_interrupt_trace();
@@ -1301,6 +1425,9 @@ static void tc_exit(void)
 	free_livepatch();
 	free_all_session();
 	free_dev_list();
+#ifdef CONFIG_FFA_SUPPORT
+	ffa_abi_unregister();
+#endif
 	tlogi("tz client exit finished");
 }
 

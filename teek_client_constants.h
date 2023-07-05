@@ -51,11 +51,22 @@ enum global_service_cmd_id {
 	GLOBAL_CMD_ID_DUMP_MEMINFO = 0x1a,
 	/* this cmd will be used to service no ca handle cmd */
 	GLOBAL_CMD_ID_SET_SERVE_CMD = 0x1b,
+	GLOBAL_CMD_ID_ADD_DYNAMIC_ION = 0x1c,
+	GLOBAL_CMD_ID_DEL_DYNAMIC_ION = 0x1d,
+	GLOBAL_CMD_ID_RELEASE_ION_SRV = 0x1e,
+	/* this cmd for tui to get notch_size */
+	GLOBAL_CMD_ID_TUI_NOTCH = 0x1f,
 	GLOBAL_CMD_ID_LATE_INIT = 0x20,
+	/* this cmd for tui to get information of foldable screen */
+	GLOBAL_CMD_ID_TUI_FOLD = 0x21,
 	GLOBAL_CMD_ID_GET_TEE_VERSION = 0x22,
 	GLOBAL_CMD_ID_REGISTER_RESMEM = 0x24,
 	GLOBAL_CMD_ID_DUMP_SRV_SESS = 0x25,
 	GLOBAL_CMD_ID_TRACE_ENABLE = 0x26,
+#ifdef CONFIG_TEE_TELEPORT_SUPPORT
+	GLOBAL_CMD_ID_PORTAL_WORK = 0x2b,
+#endif
+	GLOBAL_CMD_ID_REGISTER_HOST_NSID = 0x2d,
 	GLOBAL_CMD_ID_UNKNOWN = 0x7FFFFFFE,
 	GLOBAL_CMD_ID_MAX = 0x7FFFFFFF
 };

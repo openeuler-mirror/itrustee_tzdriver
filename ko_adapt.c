@@ -110,7 +110,7 @@ struct workqueue_attrs *koadpt_alloc_workqueue_attrs(gfp_t gfp_mask)
 	(void)gfp_mask;
 
 	attrs = kzalloc(sizeof(*attrs), GFP_KERNEL);
-	if (!attrs) {
+	if (ZERO_OR_NULL_PTR((unsigned long)(uintptr_t)attrs)) {
 		tloge("alloc workqueue attr fail\n");
 		return NULL;
 	}

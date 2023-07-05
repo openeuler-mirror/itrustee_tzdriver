@@ -37,16 +37,22 @@ enum agent_state_type {
 	AGENT_CRASHED = 0,
 	AGENT_REGISTERED,
 	AGENT_READY,
+	AGENT_PENDING,
+	AGENT_UNREGISTERED,
 };
 
 enum agent_status {
-	AGENT_ALIVE = 1,
 	AGENT_DEAD = 0,
+	AGENT_ALIVE = 1,
+	AGENT_NO_EXIST = 2,
+	AGENT_HAS_CRASHED = 3,
+	AGENT_READY_TO_UNREG = 4,
 };
 
 /* for secure agent */
 struct smc_event_data {
 	unsigned int agent_id;
+	unsigned int nsid;
 	atomic_t agent_ready;
 	wait_queue_head_t wait_event_wq;
 	int ret_flag; /* indicate whether agent is returned from TEE */
@@ -106,19 +112,20 @@ int is_allowed_agent_ca(const struct ca_info *ca,
 	bool check_agent_id);
 void agent_init(void);
 void free_agent(void);
-struct smc_event_data *find_event_control(unsigned int agent_id);
-void send_event_response(unsigned int agent_id);
-int agent_process_work(const struct tc_ns_smc_cmd *smc_cmd, unsigned int agent_id);
-int is_agent_alive(unsigned int agent_id);
+struct smc_event_data *find_event_control(unsigned int agent_id, unsigned int nsid);
+void send_event_response(unsigned int agent_id, unsigned int nsid);
+int agent_process_work(const struct tc_ns_smc_cmd *smc_cmd,
+	unsigned int agent_id, unsigned int nsid);
+int is_agent_alive(unsigned int agent_id, unsigned int nsid);
 int tc_ns_set_native_hash(unsigned long arg, unsigned int cmd_id);
 int tc_ns_late_init(unsigned long arg);
 int tc_ns_register_agent(struct tc_ns_dev_file *dev_file, unsigned int agent_id,
 	unsigned int buffer_size, void **buffer, bool user_agent);
-int tc_ns_unregister_agent(unsigned int agent_id);
+int tc_ns_unregister_agent(unsigned int agent_id, unsigned int nsid);
 void send_crashed_event_response_all(const struct tc_ns_dev_file *dev_file);
-int tc_ns_wait_event(unsigned int agent_id);
-int tc_ns_send_event_response(unsigned int agent_id);
-void send_event_response_single(const struct tc_ns_dev_file *dev_file);
+int tc_ns_wait_event(unsigned int agent_id, unsigned int nsid);
+int tc_ns_send_event_response(unsigned int agent_id, unsigned int nsid);
+void send_crashed_event_response_single(const struct tc_ns_dev_file *dev_file);
 int sync_system_time_from_user(const struct tc_ns_client_time *user_time);
 void sync_system_time_from_kernel(void);
 int tee_agent_clear_work(struct tc_ns_client_context *context,
@@ -128,4 +135,6 @@ bool is_system_agent(const struct tc_ns_dev_file *dev_file);
 void tee_agent_clear_dev_owner(const struct tc_ns_dev_file *dev_file);
 char *get_proc_dpath(char *path, int path_len);
 int check_ext_agent_access(uint32_t agent_id);
+void free_agent_list(void);
+
 #endif

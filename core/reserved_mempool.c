@@ -164,13 +164,13 @@ static int create_zone(void)
 	zone_len = sizeof(struct reserved_free_area_t) * (g_res_max_order + 1) + sizeof(*g_res_zone);
 
 	g_res_zone = kzalloc(zone_len, GFP_KERNEL);
-	if (g_res_zone == NULL) {
+	if (ZERO_OR_NULL_PTR((unsigned long)(uintptr_t)g_res_zone)) {
 		tloge("fail to create zone\n");
 		return -ENOMEM;
 	}
 
 	g_res_zone->pages = kzalloc(sizeof(struct reserved_page_t) * get_res_page_size(), GFP_KERNEL);
-	if (g_res_zone->pages == NULL) {
+	if (ZERO_OR_NULL_PTR((unsigned long)(uintptr_t)g_res_zone->pages)) {
 		tloge("failed to alloc zone pages\n");
 		kfree(g_res_zone);
 		g_res_zone = NULL;
@@ -185,7 +185,7 @@ static struct virt_page *create_virt_pages(void)
 	struct virt_page *pages = NULL;
 
 	pages = kzalloc(get_res_page_size() * sizeof(struct virt_page), GFP_KERNEL);
-	if (pages == NULL) {
+	if (ZERO_OR_NULL_PTR((unsigned long)(uintptr_t)pages)) {
 		tloge("alloc pages failed\n");
 		return NULL;
 	}
@@ -444,8 +444,8 @@ static int get_virt_page_index(const void *ptr)
 static int buddy_merge(struct virt_page *vpage, int order, unsigned int *page_index)
 {
 	int i;
-	unsigned int cur_idx = 0;
-	unsigned int buddy_idx = 0;
+	unsigned int cur_idx;
+	unsigned int buddy_idx;
 	struct reserved_page_t *self = NULL;
 	struct reserved_page_t *buddy = NULL;
 
