@@ -358,16 +358,16 @@ static int tee_trace_event_show(struct seq_file *m, void *v)
 	if (view.total > 0) {
 		uint32_t i = 0;
 
-		while (get_tee_trace_next(&view, &log_info, false) != 1) {
+		while (get_tee_trace_next(&view, &log_info, false) != -1) {
 			uint32_t task_ca = (uint32_t)(log_info.add_info);
 			uint32_t task_idx = (uint32_t)(log_info.add_info >> 32);
 
 			if (log_info.event_id == SCHED_IN || log_info.event_id == SCHED_OUT) {
-				seq_printf(m, "[%4U][cpu%3u][ca-%5u] %10llu : %s %u %s\n",
+				seq_printf(m, "[%4u][cpu%3u][ca-%5u] %10llu : %s %u %s\n",
 					i++, log_info.cpu, log_info.ca_pid, log_info.time, log_info.event_name,
 					task_ca, get_tee_trace_task_name(task_idx));
 			} else {
-				seq_printf(m, "[%4U][cpu%3u][ca-%5u] %10llu : %s %llu\n",
+				seq_printf(m, "[%4u][cpu%3u][ca-%5u] %10llu : %s %llu\n",
 					i++, log_info.cpu, log_info.ca_pid, log_info.time, log_info.event_name,
 					log_info.add_info);
 			}
