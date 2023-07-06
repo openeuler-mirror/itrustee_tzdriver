@@ -594,6 +594,7 @@ void teek_close_session(struct teec_session *session)
 	struct tc_ns_client_context cli_context;
 	struct tc_ns_client_login cli_login = {0};
 
+	if (!get_tz_init_flag()) return;
 	if (!is_close_sess_param_valid(session))
 		return;
 
@@ -662,6 +663,7 @@ uint32_t teek_invoke_command(struct teec_session *session, uint32_t cmd_id,
 	struct tc_ns_client_context cli_context;
 	struct tc_ns_client_login cli_login = { 0, 0 };
 
+	if (!get_tz_init_flag()) return (uint32_t)TEEC_ERROR_BUSY;
 	/* First, check parameters is valid or not */
 	if (!session || !session->context) {
 		tloge("input invalid session or session->context is null\n");
@@ -705,6 +707,7 @@ uint32_t teek_send_secfile(struct teec_session *session,
 {
 	uint32_t ret;
 
+	if (!get_tz_init_flag()) return (uint32_t)TEEC_ERROR_BUSY;
 	if (!file_buffer || (file_size == 0) || !session ||
 		!session->context || !session->context->dev) {
 		tloge("params error!\n");
