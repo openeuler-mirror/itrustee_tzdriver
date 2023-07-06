@@ -19,6 +19,7 @@
 #ifndef TEEK_CLIENT_API_H
 #define TEEK_CLIENT_API_H
 #include "teek_client_type.h"
+#include "teek_ns_client.h"
 
 #define TEEC_PARAM_TYPES(param0_type, param1_type, param2_type, param3_type) \
 		((param3_type) << 12 | (param2_type) << 8 | \
