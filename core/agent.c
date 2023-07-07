@@ -125,8 +125,11 @@ char *get_proc_dpath(char *path, int path_len)
 		tloge("check mm_struct failed\n");
 		return NULL;
 	}
-
+#if (KERNEL_VERSION(6, 1, 0) <= LINUX_VERSION_CODE)
 	exe_file = mm->exe_file;
+#else
+	exe_file = get_mm_exe_file(mm);
+#endif
 	if (!exe_file) {
 		mmput(mm);
 		return NULL;
