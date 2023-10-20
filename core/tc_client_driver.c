@@ -571,8 +571,11 @@ static int remap_shared_mem(struct vm_area_struct *vma,
 			tloge("remap pfn for user failed, ret %d", ret);
 		return ret;
 	}
-
+#if (KERNEL_VERSION(6, 4, 0) <= LINUX_VERSION_CODE)
+	vma->__vm_flags |= VM_USERMAP;
+#else
 	vma->vm_flags |= VM_USERMAP;
+#endif
 	ret = remap_vmalloc_range(vma, shared_mem->kernel_addr, 0);
 	if (ret != 0)
 		tloge("can't remap to user, ret = %d\n", ret);
@@ -616,8 +619,11 @@ static int tc_client_mmap(struct file *filp, struct vm_area_struct *vma)
 		mutex_unlock(&dev_file->shared_mem_lock);
 		return ret;
 	}
-
+#if (KERNEL_VERSION(6, 4, 0) <= LINUX_VERSION_CODE)
+	vma->__vm_flags |= VM_DONTCOPY;
+#else
 	vma->vm_flags |= VM_DONTCOPY;
+#endif
 	vma->vm_ops = &g_shared_remap_vm_ops;
 	shared_vma_open(vma);
 	vma->vm_private_data = (void *)dev_file;
@@ -1193,7 +1199,7 @@ static int tc_ns_client_init(void)
 	ret = load_tz_shared_mem(g_dev_node);
 	if (ret != 0)
 		goto unmap_res_mem;
-	g_driver_class = class_create(THIS_MODULE, TC_NS_CLIENT_DEV);
+	g_driver_class = class_create(TC_NS_CLIENT_DEV);
 	if (IS_ERR_OR_NULL(g_driver_class)) {
 		tloge("class create failed");
 		ret = -ENOMEM;

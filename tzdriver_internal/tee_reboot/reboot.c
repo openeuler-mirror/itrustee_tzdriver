@@ -99,7 +99,6 @@ static void tee_reboot_secondary_cpus(void)
 	int i;
 	tlogd("secondary cpu will reboot\n");
 	/* reboot secondary cpus */
-	get_online_cpus();
 	for_each_online_cpu(i) {
 		if (i != 0) {
 			INIT_WORK(&secondary_cpu_on_work[i], secondary_cpu_on_func);
@@ -109,7 +108,6 @@ static void tee_reboot_secondary_cpus(void)
 			tlogi("after flush work cpu %d\n", i);
 		}
 	}
-	put_online_cpus();
 }
 
 static void tee_reboot_work_func(struct work_struct *dummy)
