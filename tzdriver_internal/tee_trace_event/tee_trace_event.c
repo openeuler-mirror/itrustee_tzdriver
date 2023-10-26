@@ -135,7 +135,7 @@ void tee_trace_add_event(enum tee_event_id id, uint64_t add_info)
 
 	event->id = id;
 	event->ca_pid = current->pid;
-#if (KERNEL_VERSION(5, 10, 0) <= LINUX_VERSION_CODE)
+#if (KERNEL_VERSION(4, 19, 0) <= LINUX_VERSION_CODE)
 	event->time = arch_timer_read_counter();
 #else
 	event->time = arch_counter_get_cntvct();
@@ -328,7 +328,7 @@ static int tee_trace_event_start_common(uint32_t loop_enable)
 	}
 	g_event_mem->start = true;
 
-#if (KERNEL_VERSION(5, 10, 0) <= LINUX_VERSION_CODE)
+#if (KERNEL_VERSION(4, 19, 0) <= LINUX_VERSION_CODE)
 	g_trace_start_time = arch_timer_read_counter();
 #else
 	g_trace_start_time = arch_counter_get_cntvct();
