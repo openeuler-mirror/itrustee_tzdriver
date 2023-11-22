@@ -209,4 +209,8 @@ struct tc_ns_log_pool {
 #endif
 #define TC_NS_CLIENT_IOCTL_GET_TEE_INFO \
 	_IOWR(TC_NS_CLIENT_IOC_MAGIC, 26, struct tc_ns_tee_info)
+
+#define TC_NS_CLIENT_IOCTL_CHECK_CCOS \
+	_IOWR(TC_NS_CLIENT_IOC_MAGIC, 32, unsigned int)
+
 #endif

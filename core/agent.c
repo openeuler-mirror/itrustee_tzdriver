@@ -53,6 +53,7 @@
 #include "ko_adapt.h"
 #include "internal_functions.h"
 #include "auth_base_impl.h"
+#include "tee_compat_check.h"
 
 #ifdef CONFIG_CMS_CAHASH_AUTH
 #define HASH_FILE_MAX_SIZE         CONFIG_HASH_FILE_SIZE
@@ -808,8 +809,9 @@ err_out:
 static bool is_valid_agent(unsigned int agent_id,
 	unsigned int buffer_size, bool user_agent)
 {
+	unsigned int agent_buffer_threshold = is_ccos() ? SZ_512K : SZ_4K;
 	(void)agent_id;
-	if (user_agent && (buffer_size > SZ_4K)) {
+	if (user_agent && (buffer_size > agent_buffer_threshold)) {
 		tloge("size: %u of user agent's shared mem is invalid\n",
 			buffer_size);
 		return false;

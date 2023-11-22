@@ -1809,6 +1809,8 @@ static int smc_svc_thread_fn(void *arg)
 		smc_cmd.cmd_id = GLOBAL_CMD_ID_SET_SERVE_CMD;
 		ret = smp_smc_send_func(&smc_cmd, false);
 		tlogd("smc svc return 0x%x\n", ret);
+		/* add schedule to avoid upgrading or rebooting soft lockup */
+		cond_resched();
 	}
 	tloge("smc svc thread stop\n");
 	return 0;
