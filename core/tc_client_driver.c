@@ -92,7 +92,7 @@
 #endif
 
 #include "tee_info.h"
-
+#include "tee_compat_check.h"
 static struct class *g_driver_class;
 static struct device_node *g_dev_node;
 
@@ -700,6 +700,19 @@ static int ioctl_check_agent_owner(const struct tc_ns_dev_file *dev_file,
 	return 0;
 }
 
+static int ioctl_check_is_ccos(void __user *argp)
+{
+	int ret = 0;
+	unsigned int check_ccos = is_ccos() ? 1 : 0;
+	if (!argp) {
+		tloge("error input parameter\n");
+		return -EINVAL;
+	}
+	if (copy_to_user(argp, &check_ccos, sizeof(unsigned int)) != 0)
+		ret = -EFAULT;
+	return ret;
+}
+
 /* ioctls for the secure storage daemon */
 int public_ioctl(const struct file *file, unsigned int cmd, unsigned long arg, bool is_from_client_node)
 {
@@ -738,8 +751,11 @@ int public_ioctl(const struct file *file, unsigned int cmd, unsigned long arg, b
 	case TC_NS_CLIENT_IOCTL_LOAD_APP_REQ:
 		ret = tc_ns_load_secfile(file->private_data, argp, NULL, is_from_client_node);
 		break;
+	case TC_NS_CLIENT_IOCTL_CHECK_CCOS:
+		ret = ioctl_check_is_ccos(argp);
+		break;
 	default:
-		tloge("invalid cmd!");
+		tloge("invalid cmd! 0x%x\n", cmd);
 		return ret;
 	}
 	tlogd("client ioctl ret = 0x%x\n", ret);
