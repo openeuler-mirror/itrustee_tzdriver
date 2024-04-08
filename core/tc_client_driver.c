@@ -89,6 +89,9 @@
 
 #ifdef CONFIG_TEE_TELEPORT_SUPPORT
 #include "tee_portal.h"
+#ifdef CROSS_DOMAIN_PERF
+#include "tee_posix_proxy.h"
+#endif
 #endif
 
 #include "tee_info.h"
@@ -1201,6 +1204,13 @@ static int enable_dev_nodes(void)
 	return 0;
 }
 
+static char *tee_devnode(struct device *dev, umode_t *mode)
+{
+	if (strcmp(dev_name(dev, TC_NS_CVM_DEV) == 0) == 0)
+		*mode = S_IRUSER | S_IWUSER | S_IRGRP | S_IWGRP | S_IROTH | S_IWOTH;
+	return NULL;
+}
+
 static int tc_ns_client_init(void)
 {
 	int ret;
@@ -1225,7 +1235,7 @@ static int tc_ns_client_init(void)
 		ret = -ENOMEM;
 		goto unmap_res_mem;
 	}
-
+	g_driver_class->devnode = tee_devnode;
 	ret = init_dev_node(&g_tc_client, TC_NS_CLIENT_DEV, g_driver_class, &g_tc_ns_client_fops);
 	if (ret != 0) {
 		class_destroy(g_driver_class);
@@ -1370,6 +1380,9 @@ static __init int tc_init(void)
 
 #ifdef CONFIG_TEE_TELEPORT_SUPPORT
 	tee_portal_init();
+#ifdef CROSS_DOMAIN_PERF
+	tee_posix_proxy_init();
+#endif
 #endif
 
 	/*

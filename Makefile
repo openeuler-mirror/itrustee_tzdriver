@@ -3,6 +3,7 @@ obj-m := tzdriver.o
 CONFIG_FFA_SUPPORT := 0
 CONFIG_TEE_TELEPORT_SUPPORT := y
 CONFIG_CONFIDENTIAL_CONTAINER ?= y
+CROSS_DOMAIN_PERF := y
 
 tzdriver-objs := core/smc_smp.o core/tc_client_driver.o core/session_manager.o core/mailbox_mempool.o core/teek_app_load.o
 tzdriver-objs += core/agent.o core/gp_ops.o core/mem.o core/cmdmonitor.o core/tzdebug.o core/tz_spi_notify.o core/tz_pm.o core/tee_compat_check.o
@@ -15,6 +16,9 @@ tzdriver-objs += tzdriver_internal/tee_reboot/reboot.o
 
 ifeq ($(CONFIG_TEE_TELEPORT_SUPPORT), y)
 tzdriver-objs += core/tee_portal.o
+ifeq ($(CROSS_DOMAIN_PERF), y)
+tzdriver-objs += core/tee_posix_proxy.o
+endif
 EXTRA_CFLAGS += -DCONFIG_TEE_TELEPORT_SUPPORT -DCONFIG_TEE_TELEPORT_AUTH
 EXTRA_CFLAGS += -DTEE_TELEPORT_PATH_UID_AUTH_CTX=\"/usr/bin/tee_teleport:0\"
 tzdriver-objs += core/tc_cvm_driver.o
@@ -53,6 +57,9 @@ EXTRA_CFLAGS += -DCONFIG_AUTH_SUPPORT_UNAME -DCONFIG_AUTH_HASH -std=gnu99
 EXTRA_CFLAGS += -DCONFIG_TEE_UPGRADE -DCONFIG_TEE_REBOOT -DCONFIG_CONFIDENTIAL_TEE
 EXTRA_CFLAGS += -I$(PWD)/tzdriver_internal/tee_reboot
 EXTRA_CFLAGS += -DMAILBOX_POOL_COUNT=32
+ifeq ($(CROSS_DOMAIN_PERF), y)
+EXTRA_CFLAGS += -DCROSS_DOMAIN_PERF
+endif
 all:
 	make -C $(KDIR) M=$(PWD) modules
 clean:

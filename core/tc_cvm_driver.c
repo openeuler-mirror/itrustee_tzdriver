@@ -22,6 +22,9 @@
 #include "agent.h"
 #ifdef CONFIG_TEE_TELEPORT_SUPPORT
 #include "tee_portal.h"
+#ifdef CROSS_DOMAIN_PERF
+#include "tee_posix_proxy.h"
+#endif
 #endif
 
 #include "tee_info.h"
@@ -47,8 +50,45 @@ static int tc_cvm_open(struct inode *inode, struct file *file)
 
 	file->private_data = NULL;
 	ret = tc_ns_client_open(&dev, TEE_REQ_FROM_USER_MODE);
-	if (ret == 0)
+	if (ret == 0) {
+#ifdef CONFIG_CONFIDENTIAL_CONTAINER
+	dev->nsid = task_active_pid_ns(current)->ns.inum;
+#endif
 		file->private_data = dev;
+	}
+	return ret;
+}
+
+static int teleport_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
+{
+	int ret = -EFAULT;
+	void *argp = (void __user *)(uintptr_t)arg;
+	uint32_t nsid;
+
+#ifdef CONFIG_CONFIDENTIAL_CONTAINER
+	nsid = task_active_pid_ns(current)->ns.inum;
+	((struct tc_ns_dev_file *)file->private_data)->nsid = nsid;
+#else
+	nsid = PROC_ID_INIT_INO;
+#endif
+
+	switch(cmd) {
+#ifdef CONFIG_CONFIDENTIAL_CONTAINER
+	case TC_NS_CLIENT_IOCTL_PORTAL_REGISTER:
+		ret = tee_portal_register(file->private_data, argp);
+		break;
+	case TC_NS_CLIENT_IOCTL_PORTAL_WORK:
+		ret = tee_portal_work(file->private_data);
+		break;
+#ifdef CROSS_DOMAIN_PERF
+	case TC_NS_CLIENT_IOCTL_POSIX_PROXY_REGISTER_TASKLET:
+		ret = tee_posix_proxy_register_tasklet(argp, nsid);
+		break;
+#endif
+#endif
+	default:
+		tloge("invalid cmd!\n");
+	}
 	return ret;
 }
 
@@ -66,14 +106,12 @@ static long tc_cvm_ioctl(struct file *file, unsigned int cmd,
 
 #ifdef CONFIG_TEE_TELEPORT_SUPPORT
 	case TC_NS_CLIENT_IOCTL_PORTAL_REGISTER:
-		if (check_tee_teleport_auth() == 0)
-			ret = tee_portal_register(file->private_data, argp);
-		else
-			tloge("check tee_teleport path failed\n");
-		break;
 	case TC_NS_CLIENT_IOCTL_PORTAL_WORK:
+#ifdef CROSS_DOMAIN_PERF
+	case TC_NS_CLIENT_IOCTL_POSIX_PROXY_REGISTER_TASKLET:
+#endif
 		if (check_tee_teleport_auth() == 0)
-			ret = tee_portal_work(file->private_data);
+			ret = teleport_ioctl(file, cmd, arg);
 		else
 			tloge("check tee_teleport path failed\n");
 		break;
@@ -110,7 +148,9 @@ static int tc_cvm_close(struct inode *inode, struct file *file)
 	if (dev->portal_enabled)
 		tee_portal_unregister(file->private_data);
 #endif
-
+#ifdef CROSS_DOMAIN_PERF
+	(void)tee_posix_proxy_unregister_all_tasklet(file->private_data);
+#endif
 	if (is_system_agent(dev)) {
 		send_crashed_event_response_single(dev);
 		free_dev(dev);
