@@ -29,7 +29,7 @@
  struct posix_proxy_shm {
     void *buffer;
     uint32_t size;
- }
+ };
 
 struct posix_proxy_node {
     struct list_head head;
@@ -40,23 +40,23 @@ struct posix_proxy_node {
     struct posix_proxy_shm *data_shm;
     uint32_t event;
     atomic_t ref_cnt;
-}
+};
 
 struct mailbox_info {
     void *buf; /* mailbox vaddr */
     uint32_t size; /* mailbox buffer size */
     uint32_t mb_l_addr; /* low of mailbox buffer pyhs addr */
     uint32_t mb_h_addr; /* low of mailbox buffer pyhs addr */
-}
+};
 
 struct posix_proxy_control {
     struct mutex lock;
     struct list_head_list;
-}
+};
 
 static struct posix_proxy_control g_posix_proxy_control;
 
-struct pid_t get_pid_compatible_namespace(struct task_struct *task)
+static pid_t get_pid_compatible_namespace(struct task_struct *task)
 {
     /* Obtain tgid in namespace */
     pid_t namespace_tgid = task_tgid_vnr(task);
@@ -104,7 +104,7 @@ static void destroy_posix_proxy_shm(struct posix_proxy_shm *shm)
     if (shm == NULL)
         return;
 
-    if(shm->buff != NULL) {
+    if(shm->buffer != NULL) {
         release_shared_mem_page((uint64_t)(uintptr_t)shm->buffer, shm->size);
         kfree(shm->buffer);
     }
@@ -190,7 +190,7 @@ static int send_posix_proxy_smc(const struct posix_proxy_node *posix_proxy, cons
     if (posix_proxy->event == TEE_POSIX_PROXY_EVENT_REGISTER_CTRL_TASKLET ||
         posix_proxy->event == TEE_POSIX_PROXY_EVENT_REGISTER_DATA_TASKLET) {
         smc_cmd.login_data_phy = mb_info->mb_l_addr;
-        smc_cmd.login_data_h_phy = mb_info->mb_h_addr;
+        smc_cmd.login_data_h_addr = mb_info->mb_h_addr;
         smc_cmd.login_data_len = mb_info->size;
     }
     /* smc_cmd.ca_pid and smc_cmd.nsid will set in tc_ns_smc() */
@@ -225,17 +225,17 @@ static struct posix_proxy_node *find_posix_proxy_node_by_tgid(unsigned int nsid,
     return NULL;
 }
 
-static void add_posix_proxy_node_to_list(struct posix_proxy *posix_proxy)
+static void add_posix_proxy_node_to_list(struct posix_proxy_node *posix_proxy)
 {
-    mutex_lock(&g_posix_proxy_control.lock)
+    mutex_lock(&g_posix_proxy_control.lock);
     list_add_tail(&posix_proxy->head, &g_posix_proxy_control.list);
     mutex_unlock(&g_posix_proxy_control.lock);
 }
 
 static int alloc_posix_proxy_node(unsigned int nsid, struct posix_proxy_node **posix_proxy)
 {
-    *posix_proxy = (struct posix_proxy_node *)kzalloc(sizeof(struct posix_proxy_node), GP_KERNEL);
-    if (ZERO_OR_NULL_PTR(unsigned long)(uintptr_t)(*posix_proxy)) {
+    *posix_proxy = (struct posix_proxy_node *)kzalloc(sizeof(struct posix_proxy_node), GFP_KERNEL);
+    if (ZERO_OR_NULL_PTR((unsigned long)(uintptr_t)(*posix_proxy))) {
         tloge("alloc mem for posix proxy node failed\n");
         return -ENOMEM;
     }
@@ -257,14 +257,14 @@ static int add_shm_to_posix_proxy(struct posix_proxy_node *posix_proxy, struct m
     struct posix_proxy_shm *shm = NULL;
     int ret = 0;
 
-    shm = kzalloc(sizeof(struct posix_proxy_shm), GP_KERNEL);
+    shm = kzalloc(sizeof(struct posix_proxy_shm), GFP_KERNEL);
     if (ZERO_OR_NULL_PTR((unsigned long)(uintptr_t)shm)) {
         tloge("alloc shm buff failed\n");
         return -ENOMEM;
     }
 
     shm->buffer = kzalloc(mb_info->size, GFP_KERNEL);
-    if (ZERO_OR_NULL_PTR((unsigned long)(uintptr_t)shm->buff)) {
+    if (ZERO_OR_NULL_PTR((unsigned long)(uintptr_t)shm->buffer)) {
         tloge("kzalloc failed\n");
         ret = -ENOMEM;
         goto clear;
@@ -285,7 +285,7 @@ end:
     return ret;
 }
 
-static int send_ctrl_tasklet_register(unsigned int nsid, struct posix_proxy_ioctl_args *agrs)
+static int send_ctrl_tasklet_register(unsigned int nsid, struct posix_proxy_ioctl_args *args)
 {
     int ret = 0;
     struct mailbox_info mb_info = { 0 };
@@ -395,7 +395,7 @@ static bool posix_proxy_user_args_check(struct posix_proxy_ioctl_args *args)
     if (args->shm_type == CTRL_TASKLET_BUFF)
         invalid = args->addr == 0 || args->addr % PAGE_SIZE != 0 || args->buffer_size != PAGE_SIZE;
     else if (args->shm_type == DATA_TASKLET_BUFF)
-        invlaid = args->addr == 0 || args->addr % PAGE_SIZE != 0 || args->buffer_size % PAGE_SIZE != 0 ||
+        invalid = args->addr == 0 || args->addr % PAGE_SIZE != 0 || args->buffer_size % PAGE_SIZE != 0 ||
             args->buffer_size > MAX_TASKLET_BUFF_SIZE || args->buffer_size == 0;
     else
         tloge("bad type for shm\n");
@@ -408,7 +408,7 @@ int tee_posix_proxy_register_tasklet(void __user *arg, unsigned int nsid)
 {
     int ret = 0;
     struct posix_proxy_ioctl_args args = { 0 };
-    if (arg == NULL || copy_from_user(&args, (void *)(uintptr_t)arg, sizeof(args) != 0)) {
+    if (arg == NULL || copy_from_user(&args, (void *)(uintptr_t)arg, sizeof(args)) != 0) {
         tloge("arg is NULL or copy posix proxy args failed\n");
         return -EINVAL;
     }

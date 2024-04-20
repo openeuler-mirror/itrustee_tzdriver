@@ -132,7 +132,7 @@ struct load_secfile_ioctl_struct {
 enum posix_proxy_shm_type {
 	CTRL_TASKLET_BUFF = 1,
 	DATA_TASKLET_BUFF
-}
+};
 
 struct posix_proxy_ioctl_args {
 	enum posix_proxy_shm_type shm_type;

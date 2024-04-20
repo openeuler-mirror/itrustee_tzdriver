@@ -1206,7 +1206,7 @@ static int enable_dev_nodes(void)
 
 static char *tee_devnode(struct device *dev, umode_t *mode)
 {
-	if (strcmp(dev_name(dev, TC_NS_CVM_DEV) == 0) == 0)
+	if (strcmp(dev_name(dev), TC_NS_CVM_DEV) == 0)
 		*mode = S_IRUSER | S_IWUSER | S_IRGRP | S_IWGRP | S_IROTH | S_IWOTH;
 	return NULL;
 }

@@ -20,6 +20,10 @@
 #include <linux/module.h>
 #include "auth_base_impl.h"
 #include "agent.h"
+#ifdef CONFIG_CONFIDENTIAL_CONTAINER
+#include <linux/proc_ns.h>
+#include <linux/pid_namespace.h>
+#endif
 #ifdef CONFIG_TEE_TELEPORT_SUPPORT
 #include "tee_portal.h"
 #ifdef CROSS_DOMAIN_PERF
