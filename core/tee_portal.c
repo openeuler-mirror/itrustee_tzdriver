@@ -78,27 +78,6 @@ static int send_portal_smc(const struct portal_t *param)
 	return ret;
 }
 
-#ifndef CONFIG_NOCOPY_SHAREDMEM
-static int fill_shared_mem_info(uint64_t start_vaddr, uint32_t pages_no,
-	uint32_t offset, uint32_t buffer_size, uint64_t info_addr)
-{
-	(void)start_vaddr;
-	(void)pages_no;
-	(void)offset;
-	(void)buffer_size;
-	(void)info_addr;
-	tloge("shared memory is unsupported\n");
-	return -EINVAL;
-}
-
-static void release_shared_mem_page(uint64_t buf, uint32_t buf_size)
-{
-	(void)buf;
-	(void)buf_size;
-	tloge("shared memory is unsupported\n");
-}
-#endif
-
 static int init_portal_node(struct portal_t *portal, struct agent_ioctl_args *args, void* owner)
 {
 	int ret = 0;

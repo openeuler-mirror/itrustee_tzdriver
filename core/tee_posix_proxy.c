@@ -51,7 +51,7 @@ struct mailbox_info {
 
 struct posix_proxy_control {
     struct mutex lock;
-    struct list_head_list;
+    struct list_head list;
 };
 
 static struct posix_proxy_control g_posix_proxy_control;
@@ -112,7 +112,7 @@ static void destroy_posix_proxy_shm(struct posix_proxy_shm *shm)
 }
 
 #ifdef DEF_ENG
-static void attribute((unused)) dump_posix_proxy_list(void)
+static void __attribute__((unused)) dump_posix_proxy_list(void)
 {
     tloge("==== dump posix_proxy_list start ====\n");
     struct posix_proxy_node *posix_proxy = NULL;
