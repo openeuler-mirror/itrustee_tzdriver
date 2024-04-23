@@ -29,6 +29,7 @@
 #include "ko_adapt.h"
 #include "tz_kthread_affinity.h"
 #include "tc_client_driver.h"
+#include "tee_compat_check.h"
 #include <linux/sched.h>
 #include <linux/sched/rt.h>
 
@@ -332,6 +333,13 @@ int tee_reboot(void)
 
 	tee_alarm_clear(TEE_CRASH);
 	kill_teecd_and_tlogcat();
+
+#if defined(CONFIG_CONFIDENTIAL_CONTAINER) || defined(CONFIG_TEE_TELEPORT_SUPPORT)
+	if (is_ccos()) {
+		(void)init_cvm_node();
+		(void)init_cvm_node_file();
+	}
+#endif
 
 	return 0;
 

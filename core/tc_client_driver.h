@@ -28,9 +28,18 @@ struct dev_node {
 	dev_t devt;
 	struct device *class_dev;
 	const struct file_operations *fops;
-	char *node_name;
+	const char *node_name;
 };
 
+struct dev_ops {
+	bool dev_node_inited;
+	bool dev_file_inited;
+	int (*init_dev_node)(struct dev_node *node, const char *node_name,
+		struct class *driver_class, const struct file_operations *fops);
+	void (*destroy_dev_node)(struct dev_node *node, struct class *driver_class);
+};
+
+struct class *get_driver_class(void);
 bool get_tz_init_flag(void);
 struct tc_ns_dev_list *get_dev_list(void);
 struct tc_ns_dev_file *tc_find_dev_file(unsigned int dev_file_id);
@@ -38,9 +47,15 @@ int tc_ns_client_open(struct tc_ns_dev_file **dev_file, uint8_t kernel_api);
 int tc_ns_client_close(struct tc_ns_dev_file *dev);
 int is_agent_alive(unsigned int agent_id, unsigned int nsid);
 int tc_ns_register_host_nsid(void);
+int init_dev_node(struct dev_node *node, const char *node_name,
+		struct class *driver_class, const struct file_operations *fops);
+void destory_dev_node(struct dev_node *node, struct class *driver_class);
 
 #if defined(CONFIG_CONFIDENTIAL_CONTAINER) || defined(CONFIG_TEE_TELEPORT_SUPPORT)
-const struct file_operations *get_cvm_fops(void);
+int init_cvm_node(void);
+int init_cvm_node_file(void);
+void destroy_cvm_node_file(void);
+void destroy_cvm_node(void);
 #endif
 
 void handle_cmd_prepare(unsigned int cmd);

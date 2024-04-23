@@ -101,9 +101,6 @@ static struct device_node *g_dev_node;
 
 struct dev_node g_tc_client;
 struct dev_node g_tc_private;
-#if defined(CONFIG_CONFIDENTIAL_CONTAINER) || defined(CONFIG_TEE_TELEPORT_SUPPORT)
-struct dev_node g_tc_cvm;
-#endif
 
 #ifdef CONFIG_ACPI
 static int g_acpi_irq;
@@ -117,6 +114,11 @@ static DEFINE_MUTEX(g_set_ca_hash_lock);
 struct tc_ns_dev_list g_tc_ns_dev_list;
 
 static bool g_init_succ = false;
+
+struct class *get_driver_class(void)
+{
+	return g_driver_class;
+}
 
 static void set_tz_init_flag(void)
 {
@@ -1131,7 +1133,7 @@ static int create_dev_node(struct dev_node *node)
 		return ret;
 	}
 	node->class_dev = device_create(node->driver_class, NULL, node->devt,
-		NULL, node->node_name);
+		NULL, "%s", node->node_name);
 	if (IS_ERR_OR_NULL(node->class_dev)) {
 		tloge("class device create failed");
 		ret = -ENOMEM;
@@ -1149,7 +1151,7 @@ chrdev_region_unregister:
 	return ret;
 }
 
-static int init_dev_node(struct dev_node *node, char *node_name,
+int init_dev_node(struct dev_node *node, const char *node_name,
 	struct class *driver_class, const struct file_operations *fops)
 {
 	int ret = -1;
@@ -1165,8 +1167,12 @@ static int init_dev_node(struct dev_node *node, char *node_name,
 	return ret;
 }
 
-static void destory_dev_node(struct dev_node *node, struct class *driver_class)
+void destory_dev_node(struct dev_node *node, struct class *driver_class)
 {
+	if (!node || !driver_class) {
+		tloge("node/driver is NULL\n");
+		return;
+	}
 	device_destroy(driver_class, node->devt);
 	unregister_chrdev_region(node->devt, 1);
 	return;
@@ -1192,13 +1198,14 @@ static int enable_dev_nodes(void)
 	}
 
 #if defined(CONFIG_CONFIDENTIAL_CONTAINER) || defined(CONFIG_TEE_TELEPORT_SUPPORT)
-	ret = cdev_add(&(g_tc_cvm.char_dev),
-				MKDEV(MAJOR(g_tc_cvm.devt), 0), 1);
-	if (ret < 0) {
-		tloge("cdev add failed %d", ret);
-		cdev_del(&(g_tc_client.char_dev));
-		cdev_del(&(g_tc_private.char_dev));
-		return ret;
+	if (is_ccos()) {
+		ret = init_cvm_node_file();
+		if (ret != 0) {
+			tloge("cdev add failed %d", ret);
+			cdev_del(&(g_tc_client.char_dev));
+			cdev_del(&(g_tc_private.char_dev));
+			return ret;
+		}
 	}
 #endif
 	return 0;
@@ -1207,7 +1214,7 @@ static int enable_dev_nodes(void)
 static char *tee_devnode(struct device *dev, umode_t *mode)
 {
 	if (strcmp(dev_name(dev), TC_NS_CVM_DEV) == 0)
-		*mode = S_IRUSER | S_IWUSER | S_IRGRP | S_IWGRP | S_IROTH | S_IWOTH;
+		*mode = S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH | S_IWOTH;
 	return NULL;
 }
 
@@ -1248,16 +1255,6 @@ static int tc_ns_client_init(void)
 		goto unmap_res_mem;
 	}
 
-#if defined(CONFIG_CONFIDENTIAL_CONTAINER) || defined(CONFIG_TEE_TELEPORT_SUPPORT)
-	ret = init_dev_node(&g_tc_cvm, TC_NS_CVM_DEV, g_driver_class, get_cvm_fops());
-	if (ret != 0) {
-		destory_dev_node(&g_tc_private, g_driver_class);
-		destory_dev_node(&g_tc_client, g_driver_class);
-		class_destroy(g_driver_class);
-		goto unmap_res_mem;
-	}
-#endif
-
 	INIT_LIST_HEAD(&g_tc_ns_dev_list.dev_file_list);
 	mutex_init(&g_tc_ns_dev_list.dev_lock);
 	init_crypto_hash_lock();
@@ -1278,10 +1275,20 @@ static int tc_teeos_init(struct device *class_dev)
 		return ret;
 	}
 
+#if defined(CONFIG_CONFIDENTIAL_CONTAINER) || defined(CONFIG_TEE_TELEPORT_SUPPORT)
+	if (is_ccos()) {
+		ret = init_cvm_node();
+		if (ret != 0) {
+			tloge("init cvm node failed\n");
+			goto smc_data_free;
+		}
+	}
+#endif
+
 	ret = tee_init_reboot_thread();
 	if (ret != 0) {
 		tloge("init reboot thread failed\n");
-		goto smc_data_free;
+		goto cvm_node_free;
 	}
 
 	ret = reserved_mempool_init();
@@ -1315,7 +1322,12 @@ release_resmem:
 	free_reserved_mempool();
 reboot_thread_free:
 	free_reboot_thread();
+cvm_node_free:
+#if defined(CONFIG_CONFIDENTIAL_CONTAINER) || defined(CONFIG_TEE_TELEPORT_SUPPORT)
+	if (is_ccos())
+		destroy_cvm_node();
 smc_data_free:
+#endif
 	free_smc_data();
 	return ret;
 }
@@ -1402,9 +1414,6 @@ static __init int tc_init(void)
 	return 0;
 
 class_device_destroy:
-#if defined(CONFIG_CONFIDENTIAL_CONTAINER) || defined(CONFIG_TEE_TELEPORT_SUPPORT)
-	destory_dev_node(&g_tc_cvm, g_driver_class);
-#endif
 	destory_dev_node(&g_tc_client, g_driver_class);
 	destory_dev_node(&g_tc_private, g_driver_class);
 	class_destroy(g_driver_class);
@@ -1433,7 +1442,7 @@ static void tc_exit(void)
 	 * prevent access to the device node when uninstalling "tzdriver".
 	 */
 #if defined(CONFIG_CONFIDENTIAL_CONTAINER) || defined(CONFIG_TEE_TELEPORT_SUPPORT)
-	cdev_del(&(g_tc_cvm.char_dev));
+	destroy_cvm_node_file();
 #endif
 	cdev_del(&(g_tc_private.char_dev));
 	cdev_del(&(g_tc_client.char_dev));
@@ -1443,7 +1452,7 @@ static void tc_exit(void)
 	free_tz_spi(g_tc_client.class_dev);
 	/* run-time environment exit should before teeos exit */
 #if defined(CONFIG_CONFIDENTIAL_CONTAINER) || defined(CONFIG_TEE_TELEPORT_SUPPORT)
-	destory_dev_node(&g_tc_cvm, g_driver_class);
+	destroy_cvm_node();
 #endif
 
 	destory_dev_node(&g_tc_client, g_driver_class);

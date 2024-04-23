@@ -11,8 +11,8 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  */
-#ifndef TEE_PORTAL_H
-#define TEE_PORTAL_H
+#ifndef TEE_PORTAL
+#define TEE_PORTAL
 
 int tee_portal_register(void *owner, void __user *arg);
 int tee_portal_unregister(const void *owner);

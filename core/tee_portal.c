@@ -23,6 +23,8 @@
 #include <linux/stddef.h>
 #include <linux/uaccess.h>
 #include <linux/errno.h>
+#include <linux/pid_namespace.h>
+#include <linux/proc_ns.h>
 
 #define TEE_PORTAL_EVENT_REGISTER_SHM 0
 #define TEE_PORTAL_EVENT_UNREGISTER_SHM 1
@@ -65,10 +67,11 @@ static int send_portal_smc(const struct portal_t *param)
 	smc_cmd.login_data_h_addr = param->mb_h_addr;
 	smc_cmd.login_data_len = param->size;
 	smc_cmd.uid = kuid.val;
+	smc_cmd.pid = current->tgid;
 
 	ret = tc_ns_smc(&smc_cmd);
 	if (ret != 0) {
-		tloge("smc call returns error ret 0x%x\n", smc_cmd.ret_val);
+		tloge("portal smc call returns error 0x%x\n", smc_cmd.ret_val);
 		if (smc_cmd.ret_val == TEEC_ERROR_SERVICE_NOT_EXIST)
 			return -EOPNOTSUPP;
 		else if (smc_cmd.ret_val == TEEC_ERROR_OUT_OF_MEMORY)
@@ -94,7 +97,7 @@ static int init_portal_node(struct portal_t *portal, struct agent_ioctl_args *ar
 		return -ENOMEM;
 	}
 
-	if (fill_shared_mem_info(start_vaddr, page_num, 0, args->buffer_size, (uint64_t)mb_buff)) {
+	if (fill_shared_mem_info(start_vaddr, page_num, 0, args->buffer_size, (uint64_t)mb_buff) != 0) {
 		tloge("cannot fill shared memory info\n");
 		mailbox_free(mb_buff);
 		return -EFAULT;
@@ -124,6 +127,7 @@ int tee_portal_register(void *owner, void __user *arg)
 {
 	int ret;
 	struct agent_ioctl_args args;
+	struct portal_t *portal = NULL;
 
 	if (owner == NULL || arg == NULL)
 		return -EFAULT;
@@ -139,7 +143,6 @@ int tee_portal_register(void *owner, void __user *arg)
 		return -EFAULT;
 	}
 
-	struct portal_t *portal;
 	portal = (struct portal_t *)kmalloc(sizeof(struct portal_t), GFP_KERNEL);
 	if (ZERO_OR_NULL_PTR((unsigned long)(uintptr_t)(portal))) {
 		tloge("failed to alloc mem for portal node!\n");
@@ -150,7 +153,8 @@ int tee_portal_register(void *owner, void __user *arg)
 	if (check_portal_exist(owner)) {
 		mutex_unlock(&g_portal_lock);
 		tloge("illegal register request!\n");
-		return -EFAULT;
+		ret = -EFAULT;
+		goto clean;
 	}
 
 	ret = init_portal_node(portal, &args, owner);
@@ -165,7 +169,7 @@ int tee_portal_register(void *owner, void __user *arg)
 
 	ret = send_portal_smc(portal);
 	if (ret != 0) {
-		release_shared_mem_page(portal->buf, portal->size);
+		release_shared_mem_page((uint64_t)(uintptr_t)portal->buf, portal->size);
 		mailbox_free(portal->buf);
 		mutex_lock(&g_portal_lock);
 		list_del(&portal->list);
@@ -185,11 +189,20 @@ clean:
 int tee_portal_unregister(const void *owner)
 {
 	int ret;
+	struct portal_t *pos = NULL;
+	bool found = false;
+	uint32_t nsid;
+
 	if (!owner)
 		return -EFAULT;
 
-	struct portal_t *pos;
-	bool found = false;
+#ifdef CONFIG_CONFIDENTIAL_CONTAINER
+	struct tc_ns_dev_file *dev = (struct tc_ns_dev_file *)owner;
+	nsid = dev->nsid;
+#else
+	nsid = PROC_PID_INIT_INO;
+#endif
+
 	mutex_lock(&g_portal_lock);
 	list_for_each_entry(pos, &g_portal_head.list, list) {
 		if (pos->owner == owner) {
@@ -207,7 +220,7 @@ int tee_portal_unregister(const void *owner)
 	pos->event = TEE_PORTAL_EVENT_UNREGISTER_SHM;
 	ret = send_portal_smc(pos);
 
-	release_shared_mem_page(pos->buf, pos->size);
+	release_shared_mem_page((uint64_t)(uintptr_t)pos->buf, pos->size);
 	mailbox_free(pos->buf);
 
 	list_del(&pos->list);
