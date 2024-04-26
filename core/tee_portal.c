@@ -235,6 +235,9 @@ int tee_portal_work(const void *owner)
 	int ret = -EFAULT;
 	bool found = false;
 
+	if (owner == NULL)
+		return ret;
+
 	mutex_lock(&g_portal_lock);
 	list_for_each_entry(pos, &g_portal_head.list, list) {
 		if (pos->owner == owner) {
