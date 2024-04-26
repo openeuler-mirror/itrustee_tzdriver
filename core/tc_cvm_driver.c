@@ -71,7 +71,10 @@ static int teleport_ioctl(struct file *file, unsigned int cmd, unsigned long arg
 
 #ifdef CONFIG_CONFIDENTIAL_CONTAINER
 	nsid = task_active_pid_ns(current)->ns.inum;
-	((struct tc_ns_dev_file *)file->private_data)->nsid = nsid;
+    if (file->private_data != NULL)
+	    ((struct tc_ns_dev_file *)file->private_data)->nsid = nsid;
+    else
+        return ret;
 #else
 	nsid = PROC_PID_INIT_INO;
 #endif
