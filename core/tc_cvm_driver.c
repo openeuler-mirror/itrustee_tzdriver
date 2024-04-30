@@ -233,7 +233,7 @@ int init_cvm_node_file(void)
 		return 0;
 	
 	ret = cdev_add(&(g_tc_cvm.char_dev),
-		MKDEV(MAJOR(g_tc_cvm.devt), 0), 1);
+		            MKDEV(MAJOR(g_tc_cvm.devt), 0), 1);
 	if (ret < 0) {
 		tloge("create /dev/tc_ns_cvm device node file failed\n");
 		driver_class = get_driver_class();
