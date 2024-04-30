@@ -196,7 +196,6 @@ static int send_posix_proxy_smc(const struct posix_proxy_node *posix_proxy, cons
     /* smc_cmd.ca_pid and smc_cmd.nsid will set in tc_ns_smc() */
 
     ret = tc_ns_smc(&smc_cmd);
-
     if (ret != 0) {
         tloge("smc calll return error, ret 0x%x\n", smc_cmd.ret_val);
         if (smc_cmd.ret_val == TEEC_ERROR_SERVICE_NOT_EXIST)
