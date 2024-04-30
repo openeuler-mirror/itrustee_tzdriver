@@ -79,7 +79,7 @@ static int teleport_ioctl(struct file *file, unsigned int cmd, unsigned long arg
 	nsid = PROC_PID_INIT_INO;
 #endif
 
-	switch(cmd) {
+	switch (cmd) {
 #ifdef CONFIG_TEE_TELEPORT_SUPPORT
 	case TC_NS_CLIENT_IOCTL_PORTAL_REGISTER:
 		ret = tee_portal_register(file->private_data, argp);
