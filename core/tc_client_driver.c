@@ -1133,7 +1133,7 @@ static int create_dev_node(struct dev_node *node)
 		return ret;
 	}
 	node->class_dev = device_create(node->driver_class, NULL, node->devt,
-		NULL, "%s", node->node_name);
+		                            NULL, "%s", node->node_name);
 	if (IS_ERR_OR_NULL(node->class_dev)) {
 		tloge("class device create failed");
 		ret = -ENOMEM;
