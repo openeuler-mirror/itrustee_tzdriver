@@ -35,7 +35,7 @@ struct posix_proxy_node {
     struct list_head head;
     unsigned int nsid; /* namesapce id */
     pid_t tp_pid; /* teleport pid, owner of posix_proxy_node with nsid */
-    pid_t tp_ppid; /*teleport parent pid */
+    pid_t tp_ppid; /* teleport parent pid */
     struct posix_proxy_shm *ctrl_shm;
     struct posix_proxy_shm *data_shm;
     uint32_t event;
