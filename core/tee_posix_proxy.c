@@ -104,7 +104,7 @@ static void destroy_posix_proxy_shm(struct posix_proxy_shm *shm)
     if (shm == NULL)
         return;
 
-    if(shm->buffer != NULL) {
+    if (shm->buffer != NULL) {
         release_shared_mem_page((uint64_t)(uintptr_t)shm->buffer, shm->size);
         kfree(shm->buffer);
     }
@@ -156,9 +156,9 @@ static void deref_posix_proxy(struct posix_proxy_node *posix_proxy)
     if (atomic_dec_and_test(&posix_proxy->ref_cnt)) {
         if (list_empty(&posix_proxy->head) == 0)
             list_del(&posix_proxy->head);
-        if(posix_proxy->ctrl_shm != NULL)
+        if (posix_proxy->ctrl_shm != NULL)
             destroy_posix_proxy_shm(posix_proxy->ctrl_shm);
-        if(posix_proxy->data_shm != NULL)
+        if (posix_proxy->data_shm != NULL)
             destroy_posix_proxy_shm(posix_proxy->data_shm);
 
         kfree(posix_proxy);
