@@ -128,6 +128,22 @@ struct load_secfile_ioctl_struct {
 	};
 }__attribute__((packed));
 
+#ifdef CROSS_DOMAIN_PERF
+enum posix_proxy_shm_type {
+	CTRL_TASKLET_BUFF = 1,
+	DATA_TASKLET_BUFF
+};
+
+struct posix_proxy_ioctl_args {
+	enum posix_proxy_shm_type shm_type;
+	uint32_t buffer_size;
+	union {
+		void *buffer;
+		unsigned long long addr;
+	};
+};
+#endif
+
 struct agent_ioctl_args {
 	uint32_t id;
 	uint32_t buffer_size;
@@ -206,6 +222,10 @@ struct tc_ns_log_pool {
 	_IOWR(TC_NS_CLIENT_IOC_MAGIC, 24, struct agent_ioctl_args)
 #define TC_NS_CLIENT_IOCTL_PORTAL_WORK \
 	_IOWR(TC_NS_CLIENT_IOC_MAGIC, 25, struct agent_ioctl_args)
+#ifdef CROSS_DOMAIN_PERF
+#define TC_NS_CLIENT_IOCTL_POSIX_PROXY_REGISTER_TASKLET \
+	_IOWR(TC_NS_CLIENT_IOC_MAGIC, 27, struct posix_proxy_ioctl_args)
+#endif
 #endif
 #define TC_NS_CLIENT_IOCTL_GET_TEE_INFO \
 	_IOWR(TC_NS_CLIENT_IOC_MAGIC, 26, struct tc_ns_tee_info)

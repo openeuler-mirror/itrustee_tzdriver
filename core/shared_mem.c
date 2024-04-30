@@ -116,6 +116,26 @@ void release_shared_mem_page(uint64_t buf, uint32_t buf_size)
 		put_page(page);
 	}
 }
+#else
+
+int fill_shared_mem_info(uint64_t start_vaddr, uint32_t pages_no,
+	uint32_t offset, uint32_t buffer_size, uint64_t info_addr)
+{
+	(void)start_vaddr;
+	(void)pages_no;
+	(void)offset;
+	(void)buffer_size;
+	(void)info_addr;
+	tloge("shared memory is unsupported\n");
+	return -EINVAL;
+}
+
+void release_shared_mem_page(uint64_t buf, uint32_t buf_size)
+{
+	(void)buf;
+	(void)buf_size;
+	tloge("shared memory is unsupported\n");
+}
 #endif
 
 #ifdef CONFIG_SHARED_MEM_RESERVED

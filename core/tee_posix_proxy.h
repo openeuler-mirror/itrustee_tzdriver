@@ -11,12 +11,12 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  */
-#ifndef TEE_PORTAL
-#define TEE_PORTAL
+#ifndef TEE_POSIX_PROXY_H
+#define TEE_POSIX_PROXY_H
 
-int tee_portal_register(void *owner, void __user *arg);
-int tee_portal_unregister(const void *owner);
-int tee_portal_work(const void *owner);
-void tee_portal_init(void);
+int tee_posix_proxy_register_tasklet(void __user *arg, unsigned int nsid);
+int tee_posix_proxy_unregister_all_tasklet(const void *owner);
+
+void tee_posix_proxy_init(void);
 
 #endif
