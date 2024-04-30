@@ -138,7 +138,7 @@ struct posix_proxy_ioctl_args {
 	enum posix_proxy_shm_type shm_type;
 	uint32_t buffer_size;
 	union {
-		void * buffer;
+		void *buffer;
 		unsigned long long addr;
 	};
 };
