@@ -130,7 +130,11 @@ static int prepare_desc(struct sdesc **desc)
 static int get_proc_user_pages(struct mm_struct *mm, unsigned long start_code,
 	struct page **ptr_page, struct task_struct *cur_struct)
 {
-#if (KERNEL_VERSION(5, 10, 0) <= LINUX_VERSION_CODE)
+#if (KERNEL_VERSION(6, 6, 0) <= LINUX_VERSION_CODE)
+	(void)cur_struct;
+	return get_user_pages_remote(mm, start_code,
+		(unsigned long)PINED_PAGE_NUMBER, FOLL_FORCE, ptr_page, NULL);
+#elif (KERNEL_VERSION(5, 10, 0) <= LINUX_VERSION_CODE)
 	(void)cur_struct;
 	return get_user_pages_remote(mm, start_code,
 		(unsigned long)PINED_PAGE_NUMBER, FOLL_FORCE, ptr_page, NULL, NULL);

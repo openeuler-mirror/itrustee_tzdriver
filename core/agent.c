@@ -140,7 +140,9 @@ char *get_proc_dpath(char *path, int path_len)
 	path_get(&base_path);
 	dpath = d_path(&base_path, path, MAX_PATH_SIZE);
 	path_put(&base_path);
+#if (KERNEL_VERSION(6, 1, 0) > LINUX_VERSION_CODE)
 	fput(exe_file);
+#endif
 	mmput(mm);
 
 	return dpath;
