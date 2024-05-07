@@ -46,6 +46,7 @@ KDIR  := $(KPATH)/$(shell ls $(KPATH))
 
 EXTRA_CFLAGS += -isystem /usr/lib/gcc/aarch64-linux-gnu/10.3.1/include
 EXTRA_CFLAGS += -isystem /usr/lib/gcc/aarch64-openEuler-linux-gnu/12/include
+EXTRA_CFLAGS += -isystem /usr/lib/gcc/aarch64-openEuler-linux/12/include
 EXTRA_CFLAGS += -fstack-protector-strong -DCONFIG_TEELOG -DCONFIG_TZDRIVER_MODULE -DCONFIG_TEECD_AUTH -DCONFIG_PAGES_MEM=y -DCONFIG_CLOUDSERVER_TEECD_AUTH
 EXTRA_CFLAGS += -I$(PWD)/libboundscheck/include/ -I$(PWD) -I$(PWD)/auth -I$(PWD)/core -I$(PWD)/tzdriver_internal/tee_trace_event
 EXTRA_CFLAGS += -I$(PWD)/tlogger -I$(PWD)/tzdriver_internal/kthread_affinity -I$(PWD)/tzdriver_internal/include
