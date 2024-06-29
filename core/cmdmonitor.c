@@ -333,6 +333,14 @@ struct cmd_monitor *cmd_monitor_log(const struct tc_ns_smc_cmd *cmd)
 
 	pid = current->tgid;
 	tid = current->pid;
+/* It is normal for portal applications to be stuck for a long time.
+*  We do not need to add them to monitor list for checking. For example, if it starts a server,
+*  it will wait for a long time until the client connects. */
+#ifdef CONFIG_TEE_TELEPORT_SUPPORT
+	if (cmd->cmd_id == GLOBAL_CMD_ID_PORTAL_WORK)
+		return NULL;
+#endif
+
 	mutex_lock(&g_cmd_monitor_lock);
 	do {
 		list_for_each_entry(monitor, &g_cmd_monitor_list, list) {
@@ -368,8 +376,7 @@ struct cmd_monitor *cmd_monitor_log(const struct tc_ns_smc_cmd *cmd)
 			monitor->lastcmdid = cmd->cmd_id;
 			/* the first cmd will cause timer */
 			if (g_cmd_monitor_list_size == 1)
-				schedule_cmd_monitor_work(&g_cmd_monitor_work,
-					usecs_to_jiffies(S_TO_US));
+				schedule_cmd_monitor_work(&g_cmd_monitor_work, usecs_to_jiffies(S_TO_US));
 		}
 	} while (0);
 	mutex_unlock(&g_cmd_monitor_lock);

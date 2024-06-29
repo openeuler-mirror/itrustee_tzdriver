@@ -674,10 +674,19 @@ static void restore_cpu(struct cpumask *old_mask)
 }
 #endif
 
-static bool is_ready_to_kill(bool need_kill)
+static bool is_ready_to_kill(bool need_kill, uint32_t cmd_id)
 {
-	return (need_kill && sigkill_pending(current) &&
-			is_thread_reported(current->pid));
+#ifdef CONFIG_TEE_TELEPORT_SUPPORT
+	if (cmd == GLOBAL_CMD_ID_PORTAL_WORK) {
+		return (need_kill && sigkill_pending(current));
+	} else {
+		return (need_kill && sigkill_pending(current) && is_thread_reported(current->pid));
+	}
+
+#else
+	(void)cmd_id;
+	return (need_kill && sigkill_pending(current) && is_thread_reported(current->pid));
+#endif
 }
 
 static void set_smc_send_arg(struct smc_in_params *in_param,
@@ -769,10 +778,16 @@ int send_smc_cmd_rebooting(uint32_t cmd_id, const struct tc_ns_smc_cmd *in_cmd)
 }
 #endif
 
-static noinline int smp_smc_send(uint32_t cmd, unsigned long ops, unsigned long ca,
-	struct smc_cmd_ret *secret, bool need_kill)
+struct smc_send_param {
+	uint32_t cmd;
+	unsigned long ops;
+	unsigned long ca;
+};
+
+static noinline int smp_smc_send(struct smc_send_param param,
+	struct smc_cmd_ret *secret, bool need_kill, uint32_t cmd_id)
 {
-	struct smc_in_params in_param = { cmd, ops, ca, 0, 0 };
+	struct smc_in_params in_param = { param.cmd, param.ops, param.ca, 0, 0 };
 	struct smc_out_params out_param = {0};
 #if (CONFIG_CPU_AFF_NR != 0)
 	struct cpumask old_mask;
@@ -782,7 +797,7 @@ static noinline int smp_smc_send(uint32_t cmd, unsigned long ops, unsigned long 
 	set_cpu_strategy(&old_mask);
 #endif
 retry:
-	set_smc_send_arg(&in_param, secret, ops);
+	set_smc_send_arg(&in_param, secret, param.ops);
 	tee_trace_add_event(SMC_SEND, 0);
 	send_smc_cmd(&in_param, &out_param, 0);
 	tee_trace_add_event(SMC_DONE, 0);
@@ -802,7 +817,7 @@ retry:
 		 * is send but not process, the original cmd has finished.
 		 * So we send the terminate cmd in current context.
 		 */
-		if (is_ready_to_kill(need_kill)) {
+		if (is_ready_to_kill(need_kill, cmd_id)) {
 			secret->exit = SMC_EXIT_ABORT;
 			tloge("receive kill signal\n");
 		} else {
@@ -1244,8 +1259,9 @@ void fiq_shadow_work_func(uint64_t target)
 	}
 
 	livepatch_down_read_sem();
-	smp_smc_send(TSP_REQUEST, (unsigned long)SMC_OPS_START_FIQSHD,
-		(unsigned long)(uint32_t)(current->pid), &secret, false);
+	struct smc_send_param param = {.cmd = TSP_REQUEST, .ops = (unsigned long)SMC_OPS_START_FIQSHD,
+									.ca = (unsigned long)(uint32_t)(current->pid)};
+	smp_smc_send(param, &secret, false, 0);
 	livepatch_up_read_sem();
 
 	if (power_down_cc() != 0)
@@ -1438,9 +1454,8 @@ static int smp_smc_send_process(struct tc_ns_smc_cmd *cmd, u64 ops,
 	}
 
 	ca = is_ccos() ? (cmd_index) : ((unsigned long)(uint32_t)(current->pid));
-
-	ret = smp_smc_send(TSP_REQUEST, (unsigned long)ops,
-		ca, cmd_ret, ops != SMC_OPS_ABORT_TASK);
+	struct smc_send_param param = {.cmd = TSP_REQUEST, .ops = (unsigned long)ops, ca};
+	ret = smp_smc_send(param, cmd_ret, ops != SMC_OPS_ABORT_TASK, cmd->cmd_id);
 
 	if (power_down_cc() != 0) {
 		tloge("power down cc failed\n");
