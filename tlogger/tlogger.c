@@ -791,30 +791,10 @@ static int get_tlogcat_f_stat(const struct file *file)
 	return tlogf_stat;
 }
 
-static int check_user_arg(unsigned long arg, size_t arg_len)
-{
-#if (LINUX_VERSION_CODE < KERNEL_VERSION(4, 19, 18) || \
-	LINUX_VERSION_CODE == KERNEL_VERSION(4, 19, 71))
-	return (int)access_ok(VERIFY_READ,
-		(void __user *)(uintptr_t)arg, arg_len);
-#else
-	return (int)access_ok((void __user *)(uintptr_t)arg, arg_len);
-#endif
-}
-
 static int get_teeos_version(uint32_t cmd, unsigned long arg)
 {
-	int ret;
-
 	if ((_IOC_DIR(cmd) & _IOC_READ) == 0) {
 		tloge("check get version cmd failed\n");
-		return -1;
-	}
-
-	ret = check_user_arg(arg,
-		sizeof(g_log_buffer->flag.version_info));
-	if (ret == 0) {
-		tloge("check version info arg failed\n");
 		return -1;
 	}
 

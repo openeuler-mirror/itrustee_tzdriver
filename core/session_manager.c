@@ -556,12 +556,6 @@ static int check_login_method(struct tc_ns_dev_file *dev_file,
 	}
 
 	tlogd("login method is IDENTIFY\n");
-	/* check if usr params 0 and 1 are valid */
-	if (dev_file->kernel_api == TEE_REQ_FROM_USER_MODE &&
-		(!tc_user_param_valid(context, (unsigned int)0) ||
-		!tc_user_param_valid(context, (unsigned int)1)))
-		return -EINVAL;
-
 	ret = set_login_information(dev_file, context);
 	if (ret != 0) {
 		tloge("set login information failed ret =%d\n", ret);
