@@ -120,6 +120,19 @@ bool is_tmp_mem(uint32_t param_type)
 	return false;
 }
 
+bool is_shared_mem(uint32_t param_type)
+{
+#ifdef CONFIG_NOCOPY_SHAREDMEM
+	if (param_type == TEEC_MEMREF_SHARED_INOUT)
+		return true;
+#endif
+#ifdef CONFIG_REGISTER_SHAREDMEM
+	if (param_type == TEEC_MEMREF_REGISTER_INOUT)
+		return true;
+#endif
+	return false;
+}
+
 bool is_ref_mem(uint32_t param_type)
 {
 	if (param_type == TEEC_MEMREF_PARTIAL_INPUT ||
@@ -144,7 +157,7 @@ bool is_val_param(uint32_t param_type)
 
 static bool is_mem_param(uint32_t param_type)
 {
-	if (is_tmp_mem(param_type) || is_ref_mem(param_type))
+	if (is_tmp_mem(param_type) || is_ref_mem(param_type) || is_shared_mem(param_type))
 		return true;
 
 	return false;
@@ -678,10 +691,9 @@ static int alloc_operation(const struct tc_call_params *call_params,
 {
 	int ret = 0;
 	uint32_t index;
-	uint8_t kernel_params;
+	uint8_t kernel_params = call_params->dev->kernel_api;
 	uint32_t param_type;
 
-	kernel_params = call_params->dev->kernel_api;
 	for (index = 0; index < TEE_PARAM_NUM; index++) {
 		/*
 		 * Normally kernel_params = kernel_api
@@ -694,8 +706,6 @@ static int alloc_operation(const struct tc_call_params *call_params,
 			kernel_params = TEE_REQ_FROM_KERNEL_MODE;
 		param_type = teec_param_type_get(
 			call_params->context->param_types, index);
-
-		tlogd("param %u type is %x\n", index, param_type);
 		if (teec_tmpmem_type(param_type, INOUT))
 			ret = alloc_for_tmp_mem(call_params, op_params,
 				kernel_params, param_type, index);
@@ -711,7 +721,11 @@ static int alloc_operation(const struct tc_call_params *call_params,
 		else if (param_type == TEEC_ION_SGLIST_INPUT)
 			ret = alloc_for_ion_sglist(call_params, op_params,
 				kernel_params, param_type, index);
-		else if (param_type == TEEC_MEMREF_SHARED_INOUT)
+		else if (param_type == TEEC_MEMREF_SHARED_INOUT
+#ifdef CONFIG_REGISTER_SHAREDMEM
+				|| param_type == TEEC_MEMREF_REGISTER_INOUT
+#endif
+		)
 			ret = transfer_shared_mem(call_params, op_params,
 				kernel_params, param_type, index);
 		else
@@ -955,8 +969,13 @@ static void free_operation_params(const struct tc_call_params *call_params, stru
 				mailbox_free(temp_buf);
 				temp_buf = NULL;
 			}
-		} else if (param_type == TEEC_MEMREF_SHARED_INOUT) {
+		} else if (param_type == TEEC_MEMREF_SHARED_INOUT
+#ifdef CONFIG_REGISTER_SHAREDMEM
+					|| param_type == TEEC_MEMREF_REGISTER_INOUT
+#endif
+		) {
 #ifdef CONFIG_NOCOPY_SHAREDMEM
+			tlogd("free_operation_params release nocopy or register shm\n");
 			temp_buf = local_tmpbuf[index].temp_buffer;
 			if (temp_buf != NULL) {
 				release_shared_mem_page(temp_buf, local_tmpbuf[index].size);

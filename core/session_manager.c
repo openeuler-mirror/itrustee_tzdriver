@@ -1333,6 +1333,20 @@ int tc_ns_close_session(struct tc_ns_dev_file *dev_file,
 	return ret;
 }
 
+static int check_param_types(struct tc_ns_client_context *context)
+{
+	int index;
+	for (index = 0; index < TEE_PARAM_NUM; index++) {
+		uint32_t param_type = teec_param_type_get(context->param_types, index);
+		if (param_type == TEEC_MEMREF_REGISTER_INOUT) {
+			tloge("invoke should not with register shm\n");
+			return -EINVAL;
+		}
+	}
+
+	return 0;
+}
+
 int tc_ns_send_cmd(struct tc_ns_dev_file *dev_file,
 	struct tc_ns_client_context *context)
 {
@@ -1343,8 +1357,8 @@ int tc_ns_send_cmd(struct tc_ns_dev_file *dev_file,
 		dev_file, context, NULL, 0
 	};
 
-	if (!dev_file || !context) {
-		tloge("invalid dev_file or context\n");
+	if (!dev_file || !context || check_param_types(context)) {
+		tloge("invalid dev_file or context or param_types\n");
 		return ret;
 	}
 
