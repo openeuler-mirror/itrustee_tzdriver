@@ -1351,7 +1351,7 @@ int tc_ns_send_cmd(struct tc_ns_dev_file *dev_file,
 		dev_file, context, NULL, 0
 	};
 
-	if (!dev_file || !context || check_param_types(context)) {
+	if (!dev_file || !context || (check_param_types(context) != 0)) {
 		tloge("invalid dev_file or context or param_types\n");
 		return ret;
 	}

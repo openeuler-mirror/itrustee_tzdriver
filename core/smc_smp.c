@@ -677,7 +677,7 @@ static void restore_cpu(struct cpumask *old_mask)
 static bool is_ready_to_kill(bool need_kill, uint32_t cmd_id)
 {
 #ifdef CONFIG_TEE_TELEPORT_SUPPORT
-	if (cmd == GLOBAL_CMD_ID_PORTAL_WORK) {
+	if (cmd_id == GLOBAL_CMD_ID_PORTAL_WORK) {
 		return (need_kill && sigkill_pending(current));
 	} else {
 		return (need_kill && sigkill_pending(current) && is_thread_reported(current->pid));

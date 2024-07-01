@@ -122,6 +122,7 @@ bool is_tmp_mem(uint32_t param_type)
 
 bool is_shared_mem(uint32_t param_type)
 {
+	(void)param_type;
 #ifdef CONFIG_NOCOPY_SHAREDMEM
 	if (param_type == TEEC_MEMREF_SHARED_INOUT)
 		return true;
@@ -150,14 +151,6 @@ bool is_val_param(uint32_t param_type)
 		param_type == TEEC_VALUE_INOUT ||
 		param_type == TEEC_ION_INPUT ||
 		param_type == TEEC_ION_SGLIST_INPUT)
-		return true;
-
-	return false;
-}
-
-static bool is_mem_param(uint32_t param_type)
-{
-	if (is_tmp_mem(param_type) || is_ref_mem(param_type) || is_shared_mem(param_type))
 		return true;
 
 	return false;
@@ -638,7 +631,7 @@ static int alloc_operation(const struct tc_call_params *call_params,
 #ifdef CONFIG_REGISTER_SHAREDMEM
 				|| param_type == TEEC_MEMREF_REGISTER_INOUT
 #endif
-		)
+				)
 			ret = transfer_shared_mem(call_params, op_params,
 				kernel_params, param_type, index);
 		else
@@ -848,11 +841,11 @@ static void free_operation_params(const struct tc_call_params *call_params, stru
 
 	for (index = 0; index < TEE_PARAM_NUM; index++) {
 		param_type = teec_param_type_get(call_params->context->param_types, index);
-		if (is_tmp_mem(param_type)) {
+		if (is_tmp_mem(param_type) || param_type == TEEC_ION_SGLIST_INPUT) {
 			/* free temp buffer */
 			temp_buf = local_tmpbuf[index].temp_buffer;
 			tlogd("free temp buf, i = %u\n", index);
-#ifndef CONFIG_SHARED_MEM_RESERVED
+#if (!defined(CONFIG_LIBLINUX)) && (!defined(CONFIG_SHARED_MEM_RESERVED))
 			/* if temp_buf from iomap instead of page_alloc, virt_addr_valid will return false */
 			if (!virt_addr_valid((unsigned long)(uintptr_t)temp_buf))
 				continue;
@@ -870,18 +863,6 @@ static void free_operation_params(const struct tc_call_params *call_params, stru
 			put_sharemem_struct(operation->sharemem[index]);
 			if (operation->mb_buffer[index])
 				mailbox_free(operation->mb_buffer[index]);
-		} else if (param_type == TEEC_ION_SGLIST_INPUT) {
-			temp_buf = local_tmpbuf[index].temp_buffer;
-			tlogd("free ion sglist buf, i = %u\n", index);
-#ifndef CONFIG_SHARED_MEM_RESERVED
-			/* if temp_buf from iomap instead of page_alloc, virt_addr_valid will return false */
-			if (!virt_addr_valid((uint64_t)(uintptr_t)temp_buf))
-				continue;
-#endif
-			if (!ZERO_OR_NULL_PTR((unsigned long)(uintptr_t)temp_buf)) {
-				mailbox_free(temp_buf);
-				temp_buf = NULL;
-			}
 		} else if (param_type == TEEC_MEMREF_SHARED_INOUT
 #ifdef CONFIG_REGISTER_SHAREDMEM
 					|| param_type == TEEC_MEMREF_REGISTER_INOUT
