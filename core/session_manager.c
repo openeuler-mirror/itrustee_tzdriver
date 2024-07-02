@@ -556,12 +556,6 @@ static int check_login_method(struct tc_ns_dev_file *dev_file,
 	}
 
 	tlogd("login method is IDENTIFY\n");
-	/* check if usr params 0 and 1 are valid */
-	if (dev_file->kernel_api == TEE_REQ_FROM_USER_MODE &&
-		(!tc_user_param_valid(context, (unsigned int)0) ||
-		!tc_user_param_valid(context, (unsigned int)1)))
-		return -EINVAL;
-
 	ret = set_login_information(dev_file, context);
 	if (ret != 0) {
 		tloge("set login information failed ret =%d\n", ret);
@@ -1333,6 +1327,20 @@ int tc_ns_close_session(struct tc_ns_dev_file *dev_file,
 	return ret;
 }
 
+static int check_param_types(struct tc_ns_client_context *context)
+{
+	int index;
+	for (index = 0; index < TEE_PARAM_NUM; index++) {
+		uint32_t param_type = teec_param_type_get(context->param_types, index);
+		if (param_type == TEEC_MEMREF_REGISTER_INOUT) {
+			tloge("invoke should not with register shm\n");
+			return -EINVAL;
+		}
+	}
+
+	return 0;
+}
+
 int tc_ns_send_cmd(struct tc_ns_dev_file *dev_file,
 	struct tc_ns_client_context *context)
 {
@@ -1343,8 +1351,8 @@ int tc_ns_send_cmd(struct tc_ns_dev_file *dev_file,
 		dev_file, context, NULL, 0
 	};
 
-	if (!dev_file || !context) {
-		tloge("invalid dev_file or context\n");
+	if (!dev_file || !context || (check_param_types(context) != 0)) {
+		tloge("invalid dev_file or context or param_types\n");
 		return ret;
 	}
 

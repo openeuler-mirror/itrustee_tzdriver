@@ -120,6 +120,20 @@ bool is_tmp_mem(uint32_t param_type)
 	return false;
 }
 
+bool is_shared_mem(uint32_t param_type)
+{
+	(void)param_type;
+#ifdef CONFIG_NOCOPY_SHAREDMEM
+	if (param_type == TEEC_MEMREF_SHARED_INOUT)
+		return true;
+#endif
+#ifdef CONFIG_REGISTER_SHAREDMEM
+	if (param_type == TEEC_MEMREF_REGISTER_INOUT)
+		return true;
+#endif
+	return false;
+}
+
 bool is_ref_mem(uint32_t param_type)
 {
 	if (param_type == TEEC_MEMREF_PARTIAL_INPUT ||
@@ -140,101 +154,6 @@ bool is_val_param(uint32_t param_type)
 		return true;
 
 	return false;
-}
-
-static bool is_mem_param(uint32_t param_type)
-{
-	if (is_tmp_mem(param_type) || is_ref_mem(param_type))
-		return true;
-
-	return false;
-}
-
-/* Check the size and buffer addresses  have valid userspace addresses */
-static bool is_usr_refmem_valid(const union tc_ns_client_param *client_param)
-{
-	uint32_t size = 0;
-	uint64_t size_addr = client_param->memref.size_addr |
-		((uint64_t)client_param->memref.size_h_addr << ADDR_TRANS_NUM);
-	uint64_t buffer_addr = client_param->memref.buffer |
-		((uint64_t)client_param->memref.buffer_h_addr << ADDR_TRANS_NUM);
-
-#if (LINUX_VERSION_CODE < KERNEL_VERSION(4, 19, 18) || \
-	LINUX_VERSION_CODE == KERNEL_VERSION(4, 19, 71))
-	if (access_ok(VERIFY_READ, (void *)(uintptr_t)size_addr, sizeof(uint32_t)) == 0)
-#else
-	if (access_ok((void *)(uintptr_t)size_addr, sizeof(uint32_t)) == 0)
-#endif
-		return false;
-
-	get_user(size, (uint32_t *)(uintptr_t)size_addr);
-
-#if (LINUX_VERSION_CODE < KERNEL_VERSION(4, 19, 18) || \
-	LINUX_VERSION_CODE == KERNEL_VERSION(4, 19, 71))
-	if (access_ok(VERIFY_READ, (void *)(uintptr_t)buffer_addr, size) == 0)
-#else
-	if (access_ok((void *)(uintptr_t)buffer_addr, size) == 0)
-#endif
-		return false;
-
-	return true;
-}
-
-static bool is_usr_valmem_valid(const union tc_ns_client_param *client_param)
-{
-	uint64_t a_addr = client_param->value.a_addr |
-		((uint64_t)client_param->value.a_h_addr << ADDR_TRANS_NUM);
-	uint64_t b_addr = client_param->value.b_addr |
-		((uint64_t)client_param->value.b_h_addr << ADDR_TRANS_NUM);
-
-#if (LINUX_VERSION_CODE < KERNEL_VERSION(4, 19, 18) || \
-	LINUX_VERSION_CODE == KERNEL_VERSION(4, 19, 71))
-	if (access_ok(VERIFY_READ, (void *)(uintptr_t)a_addr, sizeof(uint32_t)) == 0)
-#else
-	if (access_ok((void *)(uintptr_t)a_addr, sizeof(uint32_t)) == 0)
-#endif
-		return false;
-
-#if (LINUX_VERSION_CODE < KERNEL_VERSION(4, 19, 18) || \
-	LINUX_VERSION_CODE == KERNEL_VERSION(4, 19, 71))
-	if (access_ok(VERIFY_READ, (void *)(uintptr_t)b_addr, sizeof(uint32_t)) == 0)
-#else
-	if (access_ok((void *)(uintptr_t)b_addr, sizeof(uint32_t)) == 0)
-#endif
-		return false;
-
-	return true;
-}
-
-bool tc_user_param_valid(struct tc_ns_client_context *client_context,
-	unsigned int index)
-{
-	union tc_ns_client_param *client_param = NULL;
-	unsigned int param_type;
-
-	if (check_user_param(client_context, index) != 0)
-		return false;
-
-	client_param = &(client_context->params[index]);
-	param_type = teec_param_type_get(client_context->param_types, index);
-	tlogd("param %u type is %x\n", index, param_type);
-	if (param_type == TEEC_NONE) {
-		tlogd("param type is TEEC_NONE\n");
-		return true;
-	}
-
-	if (is_mem_param(param_type)) {
-		if (!is_usr_refmem_valid(client_param))
-			return false;
-	} else if (is_val_param(param_type)) {
-		if (!is_usr_valmem_valid(client_param))
-			return false;
-	} else {
-		tloge("param types is not supported\n");
-		return false;
-	}
-
-	return true;
 }
 
 /*
@@ -678,10 +597,9 @@ static int alloc_operation(const struct tc_call_params *call_params,
 {
 	int ret = 0;
 	uint32_t index;
-	uint8_t kernel_params;
+	uint8_t kernel_params = call_params->dev->kernel_api;
 	uint32_t param_type;
 
-	kernel_params = call_params->dev->kernel_api;
 	for (index = 0; index < TEE_PARAM_NUM; index++) {
 		/*
 		 * Normally kernel_params = kernel_api
@@ -694,8 +612,6 @@ static int alloc_operation(const struct tc_call_params *call_params,
 			kernel_params = TEE_REQ_FROM_KERNEL_MODE;
 		param_type = teec_param_type_get(
 			call_params->context->param_types, index);
-
-		tlogd("param %u type is %x\n", index, param_type);
 		if (teec_tmpmem_type(param_type, INOUT))
 			ret = alloc_for_tmp_mem(call_params, op_params,
 				kernel_params, param_type, index);
@@ -711,7 +627,11 @@ static int alloc_operation(const struct tc_call_params *call_params,
 		else if (param_type == TEEC_ION_SGLIST_INPUT)
 			ret = alloc_for_ion_sglist(call_params, op_params,
 				kernel_params, param_type, index);
-		else if (param_type == TEEC_MEMREF_SHARED_INOUT)
+		else if (param_type == TEEC_MEMREF_SHARED_INOUT
+#ifdef CONFIG_REGISTER_SHAREDMEM
+				|| param_type == TEEC_MEMREF_REGISTER_INOUT
+#endif
+				)
 			ret = transfer_shared_mem(call_params, op_params,
 				kernel_params, param_type, index);
 		else
@@ -921,11 +841,11 @@ static void free_operation_params(const struct tc_call_params *call_params, stru
 
 	for (index = 0; index < TEE_PARAM_NUM; index++) {
 		param_type = teec_param_type_get(call_params->context->param_types, index);
-		if (is_tmp_mem(param_type)) {
+		if (is_tmp_mem(param_type) || param_type == TEEC_ION_SGLIST_INPUT) {
 			/* free temp buffer */
 			temp_buf = local_tmpbuf[index].temp_buffer;
 			tlogd("free temp buf, i = %u\n", index);
-#ifndef CONFIG_SHARED_MEM_RESERVED
+#if (!defined(CONFIG_LIBLINUX)) && (!defined(CONFIG_SHARED_MEM_RESERVED))
 			/* if temp_buf from iomap instead of page_alloc, virt_addr_valid will return false */
 			if (!virt_addr_valid((unsigned long)(uintptr_t)temp_buf))
 				continue;
@@ -943,20 +863,13 @@ static void free_operation_params(const struct tc_call_params *call_params, stru
 			put_sharemem_struct(operation->sharemem[index]);
 			if (operation->mb_buffer[index])
 				mailbox_free(operation->mb_buffer[index]);
-		} else if (param_type == TEEC_ION_SGLIST_INPUT) {
-			temp_buf = local_tmpbuf[index].temp_buffer;
-			tlogd("free ion sglist buf, i = %u\n", index);
-#ifndef CONFIG_SHARED_MEM_RESERVED
-			/* if temp_buf from iomap instead of page_alloc, virt_addr_valid will return false */
-			if (!virt_addr_valid((uint64_t)(uintptr_t)temp_buf))
-				continue;
+		} else if (param_type == TEEC_MEMREF_SHARED_INOUT
+#ifdef CONFIG_REGISTER_SHAREDMEM
+					|| param_type == TEEC_MEMREF_REGISTER_INOUT
 #endif
-			if (!ZERO_OR_NULL_PTR((unsigned long)(uintptr_t)temp_buf)) {
-				mailbox_free(temp_buf);
-				temp_buf = NULL;
-			}
-		} else if (param_type == TEEC_MEMREF_SHARED_INOUT) {
+		) {
 #ifdef CONFIG_NOCOPY_SHAREDMEM
+			tlogd("free_operation_params release nocopy or register shm\n");
 			temp_buf = local_tmpbuf[index].temp_buffer;
 			if (temp_buf != NULL) {
 				release_shared_mem_page(temp_buf, local_tmpbuf[index].size);
