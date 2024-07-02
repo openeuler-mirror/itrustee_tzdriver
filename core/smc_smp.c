@@ -1260,7 +1260,7 @@ void fiq_shadow_work_func(uint64_t target)
 
 	livepatch_down_read_sem();
 	struct smc_send_param param = {.cmd = TSP_REQUEST, .ops = (unsigned long)SMC_OPS_START_FIQSHD,
-									.ca = (unsigned long)(uint32_t)(current->pid)};
+                                    .ca = (unsigned long)(uint32_t)(current->pid)};
 	smp_smc_send(param, &secret, false, 0);
 	livepatch_up_read_sem();
 
