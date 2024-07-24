@@ -257,9 +257,9 @@ static void add_max_order_block(unsigned int order, unsigned int index)
 
 static bool is_ptr_valid(const mailbox_page_t *page, unsigned int *index)
 {
-	unsigned int i = 0;
+	unsigned int i;
 
-	for (; i < g_mb_count; i++) {
+	for (i = 0; i < g_mb_count; i++) {
 		if (page >= g_m_zone[i]->all_pages &&
 			page < (g_m_zone[i]->all_pages + MAILBOX_PAGE_MAX)) {
 			*index = i;
@@ -614,7 +614,7 @@ static void mailbox_debug_init(void)
 
 int re_register_mailbox(void)
 {
-	uint32_t i = 0;
+	uint32_t i;
 	int ret = 0;
 	struct mailbox_buffer *buffer = NULL;
 
@@ -629,7 +629,7 @@ int re_register_mailbox(void)
 		mutex_unlock(&g_mb_lock);
 		return -ENOMEM;
 	}
-	for (; i < g_mb_count; i++) {
+	for (i = 0; i < g_mb_count; i++) {
 		(void)memset_s((void *)mailbox_page_address(g_m_zone[i]->all_pages),
 			MAILBOX_POOL_SIZE, 0, MAILBOX_POOL_SIZE);
 		buffer[i].buffer = mailbox_virt_to_phys(mailbox_page_address(g_m_zone[i]->all_pages));
