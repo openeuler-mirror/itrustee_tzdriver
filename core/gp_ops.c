@@ -540,7 +540,7 @@ static int transfer_shared_mem(const struct tc_call_params *call_params,
 	op_params->mb_pack->operation.buffer_h_addr[index] = (uint64_t)mailbox_virt_to_phys((uintptr_t)buff) >> ADDR_TRANS_NUM;
 	op_params->mb_pack->operation.params[index].memref.size = buff_len;
 	op_params->trans_paramtype[index] = param_type;
-	
+
 #ifdef CONFIG_REGISTER_SHAREDMEM
 	if (param_type == TEEC_MEMREF_REGISTER_INOUT) {
 		call_params->sess->register_sharedmem.buf = (uint64_t)buff;
@@ -843,6 +843,31 @@ static int update_client_operation(const struct tc_call_params *call_params,
 	return ret;
 }
 
+#ifdef CONFIG_NOCOPY_SHAREDMEM
+static void free_operation_sharedmem_params(const struct tc_call_params *call_params, void *temp_buf,
+	unsigned int temp_buf_sz, uint32_t param_type, bool succ)
+{
+	if (temp_buf == NULL)
+		return;
+#ifdef CONFIG_REGISTER_SHAREDMEM
+	if (param_type == TEEC_MEMREF_REGISTER_INOUT) {
+		struct tc_ns_session *sess = call_params->sess;
+		if (!succ && (uint64_t)temp_buf == sess->register_sharedmem.buf
+				&& temp_buf_sz == sess->register_sharedmem.buf_size) {
+			/* unreigster from session when failed; release here */
+			sess->register_sharedmem.buf = 0;
+			sess->register_sharedmem.buf_size = 0;
+		} else {
+			/* actually not allocated (due to pre-checks); should not release */
+			return;
+		}
+	}
+#endif
+	release_shared_mem_page(temp_buf, temp_buf_sz);
+	mailbox_free(temp_buf);
+}
+#endif
+
 static void free_operation_params(const struct tc_call_params *call_params, struct tc_op_params *op_params, bool succ)
 {
 	uint32_t param_type;
@@ -882,26 +907,8 @@ static void free_operation_params(const struct tc_call_params *call_params, stru
 		) {
 #ifdef CONFIG_NOCOPY_SHAREDMEM
 			tlogd("free_operation_params release nocopy or register shm\n");
-			temp_buf = local_tmpbuf[index].temp_buffer;
-			unsigned int temp_buf_sz = local_tmpbuf[index].size;
-			if (temp_buf != NULL) {
-#ifdef CONFIG_REGISTER_SHAREDMEM
-				if (param_type == TEEC_MEMREF_REGISTER_INOUT) {
-					struct tc_ns_session *sess = call_params->sess;
-					if (!succ && (uint64_t)temp_buf == sess->register_sharedmem.buf
-						&& temp_buf_sz == sess->register_sharedmem.buf_size) {
-						/* unreigster from session when failed; release here */
-						sess->register_sharedmem.buf = 0;
-						sess->register_sharedmem.buf_size = 0;
-					} else {
-						/* actually not allocated (due to pre-checks); should not release */
-						continue;
-					}
-				}
-#endif
-				release_shared_mem_page(temp_buf, local_tmpbuf[index].size);
-				mailbox_free(temp_buf);
-			}
+			free_operation_sharedmem_params(call_params, local_tmpbuf[index].temp_buffer,
+							local_tmpbuf[index].size, param_type, succ);
 #endif
 		}
 	}
