@@ -55,6 +55,7 @@
 #include "tc_client_driver.h"
 #include "internal_functions.h"
 #include "ko_adapt.h"
+#include "shared_mem.h"
 
 static DEFINE_MUTEX(g_load_app_lock);
 #define MAX_REF_COUNT (255)
@@ -85,6 +86,18 @@ void init_srvc_list(void)
 	INIT_LIST_HEAD(&g_service_list);
 }
 
+#ifdef CONFIG_REGISTER_SHAREDMEM
+static void release_session_register_sharedmem(struct tc_ns_session *session)
+{
+	if (session->register_sharedmem.buf_size != 0) {
+		release_shared_mem_page(session->register_sharedmem.buf, session->register_sharedmem.buf_size);
+		mailbox_free(session->register_sharedmem.buf);
+		session->register_sharedmem.buf = 0;
+		session->register_sharedmem.buf_size = 0;
+	}
+}
+#endif
+
 void get_session_struct(struct tc_ns_session *session)
 {
 	if (!session)
@@ -100,6 +113,9 @@ void put_session_struct(struct tc_ns_session *session)
 
 	if (memset_s(session, sizeof(*session), 0, sizeof(*session)) != 0)
 		tloge("Caution, memset failed!\n");
+#ifdef CONFIG_REGISTER_SHAREDMEM
+	release_session_register_sharedmem(session);
+#endif
 	kfree(session);
 }
 
@@ -1111,6 +1127,9 @@ err_free_rsrc:
 	del_service_from_dev(dev_file, service);
 	mutex_unlock(&dev_file->service_lock);
 
+#ifdef CONFIG_REGISTER_SHAREDMEM
+	release_session_register_sharedmem(session);
+#endif
 	kfree(session);
 err_clear_param:
 	clear_context_param(context);
@@ -1171,6 +1190,9 @@ static int close_session(struct tc_ns_dev_file *dev,
 	if (ret != 0)
 		tloge("close session failed, ret=0x%x\n", ret);
 
+#ifdef CONFIG_REGISTER_SHAREDMEM
+	release_session_register_sharedmem(session);
+#endif
 	kill_ion_by_uuid((struct tc_uuid *)context.uuid);
 	return ret;
 }

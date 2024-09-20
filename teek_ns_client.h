@@ -206,6 +206,13 @@ struct tc_wait_data {
 	int send_wait_flag;
 };
 
+#ifdef CONFIG_REGISTER_SHAREDMEM
+struct tc_ns_register_sharedmem {
+	uint64_t buf;
+	uint32_t buf_size;
+};
+#endif
+
 #define NUM_OF_SO 1
 #ifdef CONFIG_CMS_CAHASH_AUTH
 #define KIND_OF_SO 1
@@ -218,6 +225,9 @@ struct tc_ns_session {
 	struct tc_wait_data wait_data;
 	struct mutex ta_session_lock; /* for open/close/invoke on 1 session */
 	struct tc_ns_dev_file *owner;
+#ifdef CONFIG_REGISTER_SHAREDMEM
+	struct tc_ns_register_sharedmem register_sharedmem;
+#endif
 	uint8_t auth_hash_buf[MAX_SHA_256_SZ * NUM_OF_SO + MAX_SHA_256_SZ];
 	atomic_t usage;
 };
