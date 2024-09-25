@@ -51,7 +51,7 @@
 #define MAX_SHARED_SIZE 0x100000      /* 1 MiB */
 
 static void free_operation_params(const struct tc_call_params *call_params,
-	struct tc_op_params *op_params);
+	struct tc_op_params *op_params, bool succ);
 
 /* dir: 0-inclue input, 1-include output, 2-both */
 #define INPUT  0
@@ -510,6 +510,11 @@ static int transfer_shared_mem(const struct tc_call_params *call_params,
 	client_param = &(call_params->context->params[index]);
 	if (check_buffer_for_sharedmem(&buffer_size, client_param, kernel_params))
 		return -EINVAL;
+#ifdef CONFIG_REGISTER_SHAREDMEM
+	if (param_type == TEEC_MEMREF_REGISTER_INOUT && call_params->sess->register_sharedmem.buf_size != 0) {
+		return -EINVAL;
+	}
+#endif
 
 	buffer_addr = client_param->memref.buffer |
 		((uint64_t)client_param->memref.buffer_h_addr << ADDR_TRANS_NUM);
@@ -535,6 +540,13 @@ static int transfer_shared_mem(const struct tc_call_params *call_params,
 	op_params->mb_pack->operation.buffer_h_addr[index] = (uint64_t)mailbox_virt_to_phys((uintptr_t)buff) >> ADDR_TRANS_NUM;
 	op_params->mb_pack->operation.params[index].memref.size = buff_len;
 	op_params->trans_paramtype[index] = param_type;
+
+#ifdef CONFIG_REGISTER_SHAREDMEM
+	if (param_type == TEEC_MEMREF_REGISTER_INOUT) {
+		call_params->sess->register_sharedmem.buf = (uint64_t)buff;
+		call_params->sess->register_sharedmem.buf_size = buff_len;
+	}
+#endif
 	return 0;
 }
 #else
@@ -641,7 +653,7 @@ static int alloc_operation(const struct tc_call_params *call_params,
 			break;
 	}
 	if (ret != 0) {
-		free_operation_params(call_params, op_params);
+		free_operation_params(call_params, op_params, false);
 		return ret;
 	}
 	op_params->mb_pack->operation.paramtypes =
@@ -831,7 +843,32 @@ static int update_client_operation(const struct tc_call_params *call_params,
 	return ret;
 }
 
-static void free_operation_params(const struct tc_call_params *call_params, struct tc_op_params *op_params)
+#ifdef CONFIG_NOCOPY_SHAREDMEM
+static void free_operation_sharedmem_params(const struct tc_call_params *call_params, void *temp_buf,
+	unsigned int temp_buf_sz, uint32_t param_type, bool succ)
+{
+	if (temp_buf == NULL)
+		return;
+#ifdef CONFIG_REGISTER_SHAREDMEM
+	if (param_type == TEEC_MEMREF_REGISTER_INOUT) {
+		struct tc_ns_session *sess = call_params->sess;
+		if (!succ && (uint64_t)temp_buf == sess->register_sharedmem.buf
+				&& temp_buf_sz == sess->register_sharedmem.buf_size) {
+			/* unreigster from session when failed; release here */
+			sess->register_sharedmem.buf = 0;
+			sess->register_sharedmem.buf_size = 0;
+		} else {
+			/* actually not allocated (due to pre-checks); should not release */
+			return;
+		}
+	}
+#endif
+	release_shared_mem_page(temp_buf, temp_buf_sz);
+	mailbox_free(temp_buf);
+}
+#endif
+
+static void free_operation_params(const struct tc_call_params *call_params, struct tc_op_params *op_params, bool succ)
 {
 	uint32_t param_type;
 	uint32_t index;
@@ -870,14 +907,12 @@ static void free_operation_params(const struct tc_call_params *call_params, stru
 		) {
 #ifdef CONFIG_NOCOPY_SHAREDMEM
 			tlogd("free_operation_params release nocopy or register shm\n");
-			temp_buf = local_tmpbuf[index].temp_buffer;
-			if (temp_buf != NULL) {
-				release_shared_mem_page(temp_buf, local_tmpbuf[index].size);
-				mailbox_free(temp_buf);
-			}
+			free_operation_sharedmem_params(call_params, local_tmpbuf[index].temp_buffer,
+							local_tmpbuf[index].size, param_type, succ);
 #endif
 		}
 	}
+	(void)succ;
 }
 
 static bool is_clicall_params_vaild(const struct tc_call_params *call_params)
@@ -1049,7 +1084,7 @@ static void pend_ca_thread(struct tc_ns_session *session,
 
 
 static void release_tc_call_resource(const struct tc_call_params *call_params,
-	struct tc_op_params *op_params, int tee_ret)
+	struct tc_op_params *op_params, int tee_ret, int ret)
 {
 	/* kfree(NULL) is safe and this check is probably not required */
 	call_params->context->returns.code = tee_ret;
@@ -1064,7 +1099,7 @@ static void release_tc_call_resource(const struct tc_call_params *call_params,
 		kill_ion_by_uuid((struct tc_uuid *)op_params->smc_cmd->uuid);
 
 	if (op_params->op_inited)
-		free_operation_params(call_params, op_params);
+		free_operation_params(call_params, op_params, ret == TEEC_SUCCESS);
 
 	kfree(op_params->smc_cmd);
 	mailbox_free(op_params->mb_pack);
@@ -1158,6 +1193,6 @@ int tc_client_call(const struct tc_call_params *call_params)
 free_src:
 	if (ret < 0) /* if ret > 0, means err from TEE */
 		op_params.smc_cmd->err_origin = TEEC_ORIGIN_COMMS;
-	release_tc_call_resource(call_params, &op_params, tee_ret);
+	release_tc_call_resource(call_params, &op_params, tee_ret, ret);
 	return ret;
 }
