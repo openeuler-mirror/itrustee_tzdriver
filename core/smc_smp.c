@@ -2108,7 +2108,6 @@ void free_smc_data(void)
 #else
 	kthread_flush_worker(g_ipi_helper_worker);
 #endif
-	kthread_destroy_worker(g_ipi_helper_worker);
 	g_ipi_helper_worker = NULL;
 	if (!IS_ERR_OR_NULL(g_ipi_helper_thread)) {
 		kthread_stop(g_ipi_helper_thread);
