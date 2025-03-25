@@ -330,7 +330,7 @@ static int tc_ns_need_load_image(const struct tc_ns_dev_file *dev_file,
 	smc_cmd.operation_h_phys =
 		(uint64_t)mailbox_virt_to_phys((uintptr_t)&mb_pack->operation) >> ADDR_TRANS_NUM;
 
-	smc_ret = tc_ns_smc(&smc_cmd);
+	smc_ret = tc_ns_smc_skip_kill(&smc_cmd);
 	if (smc_ret != 0) {
 		tloge("smc call returns error ret 0x%x\n", smc_ret);
 		if (smc_cmd.err_origin != TEEC_ORIGIN_COMMS && tee_ret != NULL) {
@@ -851,7 +851,7 @@ static int load_image_by_frame(struct load_img_params *params, unsigned int load
 #ifdef CONFIG_CONFIDENTIAL_CONTAINER
 		smc_cmd.nsid = params->dev_file->nsid;
 #endif
-		smc_ret = tc_ns_smc(&smc_cmd);
+		smc_ret = tc_ns_smc_skip_kill(&smc_cmd);
 		tlogd("configid=%u, ret=%d, load_flag=%d, index=%u\n",
 			params->mb_pack->operation.params[1].value.a, smc_ret,
 			load_flag, index);

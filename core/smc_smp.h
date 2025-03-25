@@ -130,6 +130,7 @@ union crash_inf {
 bool sigkill_pending(struct task_struct *tsk);
 int smc_context_init(const struct device *class_dev);
 void free_smc_data(void);
+int tc_ns_smc_skip_kill(struct tc_ns_smc_cmd *cmd);
 int tc_ns_smc(struct tc_ns_smc_cmd *cmd);
 int tc_ns_smc_with_no_nr(struct tc_ns_smc_cmd *cmd);
 int teeos_log_exception_archive(unsigned int eventid, const char *exceptioninfo);
