@@ -78,7 +78,7 @@ struct agent_pair {
 
 static struct agent_control g_agent_control;
 
-static void process_send_event_response(struct smc_event_data *event_data);
+static void process_send_event_response(struct smc_event_data *event_data, bool force);
 int __attribute__((weak)) is_allowed_agent_ca(const struct ca_info *ca,
 	bool check_agent_id)
 {
@@ -672,9 +672,9 @@ void sync_system_time_from_kernel(void)
 	return;
 }
 
-static void process_send_event_response(struct smc_event_data *event_data)
+static void process_send_event_response(struct smc_event_data *event_data, bool force)
 {
-	if (event_data->ret_flag == 0)
+	if (event_data->ret_flag == 0 && !force)
 		return;
 
 	event_data->ret_flag = 0;
@@ -682,6 +682,7 @@ static void process_send_event_response(struct smc_event_data *event_data)
 	tlogd("agent wakeup ca\n");
 	atomic_set(&event_data->ca_run, 1);
 	/* make sure reset working_ca before wakeup CA */
+	asm volatile("dmb sy");
 	wake_up(&event_data->ca_pending_wq);
 }
 
@@ -702,7 +703,7 @@ int tc_ns_send_event_response(unsigned int agent_id, unsigned int nsid)
 	}
 
 	tlogd("agent 0x%x nsid 0x%x sends answer back\n", agent_id, nsid);
-	process_send_event_response(event_data);
+	process_send_event_response(event_data, false);
 	put_agent_event(event_data);
 
 	return 0;
@@ -724,7 +725,7 @@ void send_event_response(unsigned int agent_id, unsigned int nsid)
 
 	tlogi("agent 0x%x nsid 0x%x sends answer back\n", agent_id, nsid);
 	atomic_set(&event_data->agent_ready, AGENT_CRASHED);
-	process_send_event_response(event_data);
+	process_send_event_response(event_data, false);
 	put_agent_event(event_data);
 }
 
@@ -1038,7 +1039,7 @@ int tc_ns_unregister_agent(unsigned int agent_id, unsigned int nsid)
 		ret = -EBUSY;
 		atomic_set(&(event_data->agent_ready), AGENT_PENDING);
 		unmap_agent_buffer(event_data);
-		process_send_event_response(event_data);
+		process_send_event_response(event_data, true);
 		tlogi("unregister agent(0x%x, 0x%x) success, but agent buffer is used in tee\n",
 			agent_id, nsid);
 	} else {
@@ -1380,7 +1381,7 @@ void free_agent_list(void)
 		event_data->ret_flag = 1;
 		wake_up(&event_data->wait_event_wq);
 
-		process_send_event_response(event_data);
+		process_send_event_response(event_data, false);
 		mailbox_free(event_data->agent_buff_kernel);
 		event_data->agent_buff_kernel = NULL;
 		put_agent_event(event_data);
