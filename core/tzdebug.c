@@ -45,6 +45,9 @@
 #include "cmdmonitor.h"
 #include "session_manager.h"
 #include "internal_functions.h"
+#include "tee_compat_check.h"
+#include "smc_smp.h"
+#include "teek_client_constants.h"
 
 #define DEBUG_OPT_LEN 128
 
@@ -184,11 +187,31 @@ int get_tee_meminfo(struct tee_mem *meminfo)
 }
 EXPORT_SYMBOL(get_tee_meminfo);
 
+static void send_dump_task_state(void)
+{
+	struct tc_ns_smc_cmd smc_cmd = {{0}, 0};
+
+	smc_cmd.cmd_id = GLOBAL_CMD_ID_DUMP_TASK_STATE;
+	smc_cmd.cmd_type = CMD_TYPE_GLOBAL;
+
+	livepatch_down_read_sem();
+	if (smp_smc_send_func(&smc_cmd, false, false) != 0)
+		tloge("send dump task state failed\n");
+
+	livepatch_up_read_sem();
+	tz_log_write();
+	return;
+}
+
+
 static void tzdump(const char *param)
 {
 	(void)param;
 	show_cmd_bitmap();
-	wakeup_tc_siq(SIQ_DUMP_SHELL);
+	if (is_ccos())
+		send_dump_task_state();
+	else
+		wakeup_tc_siq(SIQ_DUMP_SHELL);
 }
 
 static void tzmemdump(const char *param)

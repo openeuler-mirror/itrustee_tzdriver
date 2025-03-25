@@ -1775,7 +1775,7 @@ static void set_cmd_reuse_info(struct cmd_reuse_info *info, struct tc_ns_smc_cmd
 	info->cmd_usage = RESEND;
 }
 
-static int smp_smc_send_func(struct tc_ns_smc_cmd *in, bool reuse, bool skip_kill)
+int smp_smc_send_func(struct tc_ns_smc_cmd *in, bool reuse, bool skip_kill)
 {
 	struct cmd_reuse_info info = { 0, 0, CLEAR };
 	struct smc_cmd_ret cmd_ret = {0};

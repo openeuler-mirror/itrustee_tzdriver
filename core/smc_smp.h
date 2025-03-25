@@ -152,5 +152,6 @@ void svc_thread_release(void);
 int send_smc_cmd_rebooting(uint32_t cmd_id, const struct tc_ns_smc_cmd *in_cmd);
 void send_smc_cmd_buffer(bool tee_is_dead);
 int parse_params_from_tee(void);
+int smp_smc_send_func(struct tc_ns_smc_cmd *in, bool reuse, bool skip_kill);
 
 #endif
