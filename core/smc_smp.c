@@ -513,8 +513,10 @@ static struct pending_entry *init_pending_entry(void)
 	pe->task = current;
 
 #ifdef CONFIG_TA_AFFINITY
-	cpumask_copy(&pe->ca_mask, CURRENT_CPUS_ALLOWED);
-	cpumask_copy(&pe->ta_mask, CURRENT_CPUS_ALLOWED);
+	if (!is_ccos()) {
+		cpumask_copy(&pe->ca_mask, CURRENT_CPUS_ALLOWED);
+		cpumask_copy(&pe->ta_mask, CURRENT_CPUS_ALLOWED);
+	}
 #endif
 
 	init_waitqueue_head(&pe->wq);
@@ -582,7 +584,8 @@ static void restore_cpu_mask(struct pending_entry *pe)
 static void release_pending_entry(struct pending_entry *pe)
 {
 #ifdef CONFIG_TA_AFFINITY
-	restore_cpu_mask(pe);
+	if (!is_ccos())
+		restore_cpu_mask(pe);
 #endif
 	spin_lock(&g_pend_lock);
 	list_del(&pe->list);
@@ -604,6 +607,9 @@ static inline bool is_shadow_exit(uint64_t target)
 #ifdef CONFIG_TA_AFFINITY
 static bool match_ta_affinity(struct pending_entry *pe)
 {
+	if (is_ccos())
+		return false;
+
 	if (!cpumask_equal(CURRENT_CPUS_ALLOWED, &pe->ta_mask)) {
 		if (set_cpus_allowed_ptr(current, &pe->ta_mask)) {
 			tlogw("set %s affinity failed\n", current->comm);

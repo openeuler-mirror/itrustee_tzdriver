@@ -56,6 +56,7 @@
 #include "internal_functions.h"
 #include "ko_adapt.h"
 #include "shared_mem.h"
+#include "tee_compat_check.h"
 
 static DEFINE_MUTEX(g_load_app_lock);
 #define MAX_REF_COUNT (255)
@@ -1276,17 +1277,25 @@ void close_unclosed_session_in_kthread(struct tc_ns_dev_file *dev)
 	close_session_thread_fn(dev);
 	(void)close_thread;
 #else
-	close_thread = kthread_create(close_session_thread_fn,
-		dev, "close_fn_%6d", dev->dev_file_id);
-	if (unlikely(IS_ERR_OR_NULL(close_thread))) {
-		tloge("fail to create close session thread\n");
-		return;
-	}
+	if (is_ccos()) {
+		/**
+		 * In CCOS, TA's affinity can be set just in TEE, and CA affinity does not influence TA affiity,
+		 * so no need to go to tzdriver to set affinity.
+		 */
+		close_session_thread_fn(dev);
+	} else {
+		close_thread = kthread_create(close_session_thread_fn,
+			dev, "close_fn_%6d", dev->dev_file_id);
+		if (unlikely(IS_ERR_OR_NULL(close_thread))) {
+			tloge("fail to create close session thread\n");
+			return;
+		}
 
-	tz_kthread_bind_mask(close_thread);
-	wake_up_process(close_thread);
-	wait_for_completion(&dev->close_comp);
-	tlogd("wait for completion success\n");
+		tz_kthread_bind_mask(close_thread);
+		wake_up_process(close_thread);
+		wait_for_completion(&dev->close_comp);
+		tlogd("wait for completion success\n");
+	}
 #endif
 }
 
