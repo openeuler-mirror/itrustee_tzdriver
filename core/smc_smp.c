@@ -513,8 +513,10 @@ static struct pending_entry *init_pending_entry(void)
 	pe->task = current;
 
 #ifdef CONFIG_TA_AFFINITY
-	cpumask_copy(&pe->ca_mask, CURRENT_CPUS_ALLOWED);
-	cpumask_copy(&pe->ta_mask, CURRENT_CPUS_ALLOWED);
+	if (!is_ccos()) {
+		cpumask_copy(&pe->ca_mask, CURRENT_CPUS_ALLOWED);
+		cpumask_copy(&pe->ta_mask, CURRENT_CPUS_ALLOWED);
+	}
 #endif
 
 	init_waitqueue_head(&pe->wq);
@@ -582,7 +584,8 @@ static void restore_cpu_mask(struct pending_entry *pe)
 static void release_pending_entry(struct pending_entry *pe)
 {
 #ifdef CONFIG_TA_AFFINITY
-	restore_cpu_mask(pe);
+	if (!is_ccos())
+		restore_cpu_mask(pe);
 #endif
 	spin_lock(&g_pend_lock);
 	list_del(&pe->list);
@@ -604,6 +607,9 @@ static inline bool is_shadow_exit(uint64_t target)
 #ifdef CONFIG_TA_AFFINITY
 static bool match_ta_affinity(struct pending_entry *pe)
 {
+	if (is_ccos())
+		return false;
+
 	if (!cpumask_equal(CURRENT_CPUS_ALLOWED, &pe->ta_mask)) {
 		if (set_cpus_allowed_ptr(current, &pe->ta_mask)) {
 			tlogw("set %s affinity failed\n", current->comm);
@@ -674,8 +680,15 @@ static void restore_cpu(struct cpumask *old_mask)
 }
 #endif
 
-static bool is_ready_to_kill(bool need_kill, uint32_t cmd_id)
+static bool is_ready_to_kill(bool need_kill, uint32_t cmd_id, bool skip_kill)
 {
+#ifdef LATE_KILL_WHEN_TA_LOAD
+    if (skip_kill) {
+        return false;
+    }
+#else
+    (void)skip_kill;
+#endif
 #ifdef CONFIG_TEE_TELEPORT_SUPPORT
 	if (cmd_id == GLOBAL_CMD_ID_PORTAL_WORK) {
 		return (need_kill && sigkill_pending(current));
@@ -785,7 +798,7 @@ struct smc_send_param {
 };
 
 static noinline int smp_smc_send(struct smc_send_param param,
-	struct smc_cmd_ret *secret, bool need_kill, uint32_t cmd_id)
+	struct smc_cmd_ret *secret, bool need_kill, uint32_t cmd_id, bool skip_kill)
 {
 	struct smc_in_params in_param = { param.cmd, param.ops, param.ca, 0, 0 };
 	struct smc_out_params out_param = {0};
@@ -817,7 +830,7 @@ retry:
 		 * is send but not process, the original cmd has finished.
 		 * So we send the terminate cmd in current context.
 		 */
-		if (is_ready_to_kill(need_kill, cmd_id)) {
+		if (is_ready_to_kill(need_kill, cmd_id, skip_kill)) {
 			secret->exit = SMC_EXIT_ABORT;
 			tloge("receive kill signal\n");
 		} else {
@@ -1261,7 +1274,7 @@ void fiq_shadow_work_func(uint64_t target)
 	livepatch_down_read_sem();
 	struct smc_send_param param = {.cmd = TSP_REQUEST, .ops = (unsigned long)SMC_OPS_START_FIQSHD,
                                     .ca = (unsigned long)(uint32_t)(current->pid)};
-	smp_smc_send(param, &secret, false, 0);
+	smp_smc_send(param, &secret, false, 0, false);
 	livepatch_up_read_sem();
 
 	if (power_down_cc() != 0)
@@ -1440,7 +1453,7 @@ void clr_system_crash_flag(void)
 }
 
 static int smp_smc_send_process(struct tc_ns_smc_cmd *cmd, u64 ops,
-	struct smc_cmd_ret *cmd_ret, int cmd_index)
+	struct smc_cmd_ret *cmd_ret, int cmd_index, bool skip_kill)
 {
 	int ret;
 	unsigned long ca;
@@ -1455,7 +1468,7 @@ static int smp_smc_send_process(struct tc_ns_smc_cmd *cmd, u64 ops,
 
 	ca = is_ccos() ? (cmd_index) : ((unsigned long)(uint32_t)(current->pid));
 	struct smc_send_param param = {.cmd = TSP_REQUEST, .ops = (unsigned long)ops, ca};
-	ret = smp_smc_send(param, cmd_ret, ops != SMC_OPS_ABORT_TASK, cmd->cmd_id);
+	ret = smp_smc_send(param, cmd_ret, ops != SMC_OPS_ABORT_TASK, cmd->cmd_id, skip_kill);
 
 	if (power_down_cc() != 0) {
 		tloge("power down cc failed\n");
@@ -1523,9 +1536,16 @@ static int init_for_smc_send(struct tc_ns_smc_cmd *in,
 	return 0;
 }
 
-static bool is_ca_killed(int cmd_index)
+static bool is_ca_killed(int cmd_index, bool skip_kill)
 {
 	(void)cmd_index;
+#ifdef LATE_KILL_WHEN_TA_LOAD
+	if (skip_kill) {
+		return false;
+	}
+#else
+	(void)skip_kill;
+#endif
 	/* if CA has not been killed */
 	if (sigkill_pending(current)) {
 		/* signal pending, send abort cmd */
@@ -1648,7 +1668,7 @@ static long wait_event_internal(struct pending_entry *pe, struct timeout_step_t 
 }
 static enum pending_t proc_ta_pending(struct pending_entry *pe,
 	struct timeout_step_t *step, uint64_t pending_args, uint32_t cmd_index,
-	u64 *ops)
+	u64 *ops, bool skip_kill)
 {
 	bool kernel_call = false;
 	bool woke_up = false;
@@ -1680,7 +1700,7 @@ resleep:
 				goto resleep;
 			}
 		}
-		if (is_ca_killed(cmd_index)) {
+		if (is_ca_killed(cmd_index, skip_kill)) {
 			*ops = (u64)process_abort_cmd(cmd_index, pe);
 			return PD_WAKEUP;
 		}
@@ -1711,7 +1731,7 @@ static void set_timeout_step(struct timeout_step_t *timeout_step)
 
 static enum smc_status_t proc_normal_exit(struct pending_entry *pe, u64 *ops,
 	struct timeout_step_t *timeout_step, struct smc_cmd_ret *cmd_ret,
-	int cmd_index)
+	int cmd_index, bool skip_kill)
 {
 	enum pending_t pd_ret;
 
@@ -1722,7 +1742,7 @@ static enum smc_status_t proc_normal_exit(struct pending_entry *pe, u64 *ops,
 	}
 
 	pd_ret = proc_ta_pending(pe, timeout_step,
-		cmd_ret->ta, (uint32_t)cmd_index, ops);
+		cmd_ret->ta, (uint32_t)cmd_index, ops, skip_kill);
 	if (pd_ret == PD_DONE)
 		return ST_DONE;
 
@@ -1755,7 +1775,7 @@ static void set_cmd_reuse_info(struct cmd_reuse_info *info, struct tc_ns_smc_cmd
 	info->cmd_usage = RESEND;
 }
 
-static int smp_smc_send_func(struct tc_ns_smc_cmd *in, bool reuse)
+int smp_smc_send_func(struct tc_ns_smc_cmd *in, bool reuse, bool skip_kill)
 {
 	struct cmd_reuse_info info = { 0, 0, CLEAR };
 	struct smc_cmd_ret cmd_ret = {0};
@@ -1787,13 +1807,13 @@ retry:
 		return TEEC_ERROR_GENERIC;
 	}
 
-	if (smp_smc_send_process(&cmd, ops, &cmd_ret, info.cmd_index) == -1)
+	if (smp_smc_send_process(&cmd, ops, &cmd_ret, info.cmd_index, skip_kill) == -1)
 		goto clean;
 
 	if (!is_cmd_working_done((uint32_t)info.cmd_index)) {
 		if (cmd_ret.exit == SMC_EXIT_NORMAL) {
 			if (proc_normal_exit(pe, &ops, &timeout_step, &cmd_ret,
-				info.cmd_index) == ST_RETRY)
+				info.cmd_index, skip_kill) == ST_RETRY)
 				goto retry;
 		} else if (cmd_ret.exit == SMC_EXIT_ABORT) {
 			ops = (u64)process_abort_cmd(info.cmd_index, pe);
@@ -1822,7 +1842,7 @@ static int smc_svc_thread_fn(void *arg)
 
 		smc_cmd.cmd_type = CMD_TYPE_GLOBAL;
 		smc_cmd.cmd_id = GLOBAL_CMD_ID_SET_SERVE_CMD;
-		ret = smp_smc_send_func(&smc_cmd, false);
+		ret = smp_smc_send_func(&smc_cmd, false, false);
 		tlogd("smc svc return 0x%x\n", ret);
 		/* add schedule to avoid upgrading or rebooting soft lockup */
 		cond_resched();
@@ -1862,7 +1882,7 @@ void wakeup_tc_siq(uint32_t siq_mode)
  * This function first power on crypto cell, then send smc cmd to trustedcore.
  * After finished, power off crypto cell.
  */
-static int proc_tc_ns_smc(struct tc_ns_smc_cmd *cmd, bool reuse)
+static int proc_tc_ns_smc(struct tc_ns_smc_cmd *cmd, bool reuse, bool skip_kill)
 {
 	int ret;
 	struct cmd_monitor *item = NULL;
@@ -1887,20 +1907,25 @@ static int proc_tc_ns_smc(struct tc_ns_smc_cmd *cmd, bool reuse)
 		raw_smp_processor_id());
 
 	item = cmd_monitor_log(cmd);
-	ret = smp_smc_send_func(cmd, reuse);
+	ret = smp_smc_send_func(cmd, reuse, skip_kill);
 	cmd_monitor_logend(item);
 
 	return ret;
 }
 
+int tc_ns_smc_skip_kill(struct tc_ns_smc_cmd *cmd)
+{
+	return proc_tc_ns_smc(cmd, false, true);
+}
+
 int tc_ns_smc(struct tc_ns_smc_cmd *cmd)
 {
-	return proc_tc_ns_smc(cmd, false);
+	return proc_tc_ns_smc(cmd, false, false);
 }
 
 int tc_ns_smc_with_no_nr(struct tc_ns_smc_cmd *cmd)
 {
-	return proc_tc_ns_smc(cmd, true);
+	return proc_tc_ns_smc(cmd, true, false);
 }
 
 void send_smc_cmd_buffer(bool tee_is_dead)
