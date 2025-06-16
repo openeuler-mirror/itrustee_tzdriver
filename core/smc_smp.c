@@ -444,7 +444,7 @@ static void show_single_cmd_info(const int *cmd, uint32_t len)
 	for (idx = 0; idx < MAX_SMC_CMD; idx++) {
 		if (cmd[idx] == -1)
 			break;
-		tlogi("cmd[%d]: cmd_id=%u, ca_pid=%u, dev_id = 0x%x, "
+		tlogd("cmd[%d]: cmd_id=%u, ca_pid=%u, dev_id = 0x%x, "
 			"event_nr=%u, ret_val=0x%x\n",
 			cmd[idx],
 			g_cmd_data->in[cmd[idx]].cmd_id,
