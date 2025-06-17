@@ -1823,6 +1823,11 @@ retry:
 			cmd.ret_val = TEEC_ERROR_GENERIC;
 			goto clean;
 		}
+	} else if (is_ccos()) {
+		if (cmd_ret.exit == SMC_EXIT_ABORT) {
+			ops = SMC_OPS_SCHEDTO;
+			goto retry;
+		}
 	}
 
 	if (handle_cmd_working_done(&cmd, &ops, in, &info) == ST_RETRY)
