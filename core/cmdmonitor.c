@@ -205,7 +205,7 @@ static void show_timeout_cmd_info(struct cmd_monitor *monitor)
 	/* timeout to 10s, we log the teeos log, and report */
 	if ((timedif > CMD_MAX_EXECUTE_TIME * S_TO_MS) && (!monitor->is_reported)) {
 		monitor->is_reported = true;
-		tlogw("[cmd_monitor_tick] pid=%d,pname=%s,tid=%d, "
+		tlogd("[cmd_monitor_tick] pid=%d,pname=%s,tid=%d, "
 			"tname=%s, lastcmdid=%u, agent call count:%d, "
 			"running with timedif=%lld ms and report\n",
 			monitor->pid, monitor->pname, monitor->tid,
@@ -228,7 +228,7 @@ static void show_timeout_cmd_info(struct cmd_monitor *monitor)
 		monitor->lasttime = nowtime;
 		monitor->timer_index = monitor->timer_index >= (int32_t)sizeof(g_timer_step) ?
 			(int32_t)sizeof(g_timer_step) : (monitor->timer_index + 1);
-		tlogw("[cmd_monitor_tick] pid=%d,pname=%s,tid=%d, "
+		tlogd("[cmd_monitor_tick] pid=%d,pname=%s,tid=%d, "
 			"lastcmdid=%u,agent call count:%d,timedif=%lld ms\n",
 			monitor->pid, monitor->pname, monitor->tid,
 			monitor->lastcmdid, monitor->agent_call_count,
