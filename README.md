@@ -1,27 +1,45 @@
-iTrustee OS tzdriver
-介绍
-iTrustee OS 非安全侧driver，支持与iTrustee OS通信
+# iTrustee tzdriver
 
-环境准备
-  1）准备一台ARM服务器，比如鲲鹏920
-  2）下载kernel代码
-  3）下载libboundscheck库，下载地址https://gitee.com/openeuler/libboundscheck
-编译教程
-  1）解压libboundscheck，放到源码目录，结构如下：
-   
+#### 介绍
+iTrustee OS 非安全侧driver，支持与iTrustee OS通信。
+
+#### 操作系统
+支持ARM服务器，比如鲲鹏920。
+
+#### 编译教程
+1）下载tzdriver代码。
+
+2）下载libboundscheck库，下载地址<https://gitee.com/openeuler/libboundscheck> 
+
+3）解压libboundscheck，放到源码目录：
+
+```
+itrustee_tzdriver
+|--Makefile
+|--core
+|--......
+|--libboundscheck
+    |--src
+    |--include
     |--Makefile
-    |--core
-    |--......
-    |--libboundscheck
-        |--src
-        |--include
-        |--Makefile
-   2）cd xxx(driver 源码路径)
-   3）make -C libboundscheck
-   4）make
-   编译出tzdriver.ko文件
-使用说明
-   1）确保ARM 服务器已经运行iTrustee OS
-   2）使用root用户，执行insmod tzdriver.ko
-   3）使用root用户，执行/usr/bin/teecd&
-   4）运行测试CA 和TA
+```
+
+4）cd xxx(tzdriver 源码路径)。
+
+5）make -C libboundscheck。
+
+6）make 编译出tzdriver.ko文件。
+
+#### 使用说明
+
+1）确保ARM 服务器已经运行iTrustee OS。
+
+2）使用root用户，执行insmod tzdriver.ko
+
+3）使用root用户，执行nohup /usr/bin/teecd &
+
+4）运行测试CA 和TA。
+
+#### 参与贡献
+    如果您想为本仓库贡献代码，请向本仓库任意maintainer发送邮件
+    如果您找到产品中的任何Bug，欢迎您提出ISSUE
