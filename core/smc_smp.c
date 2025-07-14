@@ -125,7 +125,7 @@ struct cmd_reuse_info {
 	enum cmd_reuse cmd_usage;
 };
 
-#if (CONFIG_CPU_AFF_NR != 0)
+#if (CONFIG_CPU_AFF_NR != 0) || (defined CONFIG_CPU_GROUP_BINDING)
 static struct cpumask g_cpu_mask;
 static int g_mask_flag = 0;
 #endif
@@ -513,10 +513,8 @@ static struct pending_entry *init_pending_entry(void)
 	pe->task = current;
 
 #ifdef CONFIG_TA_AFFINITY
-	if (!is_ccos()) {
-		cpumask_copy(&pe->ca_mask, CURRENT_CPUS_ALLOWED);
-		cpumask_copy(&pe->ta_mask, CURRENT_CPUS_ALLOWED);
-	}
+	cpumask_copy(&pe->ca_mask, CURRENT_CPUS_ALLOWED);
+	cpumask_copy(&pe->ta_mask, CURRENT_CPUS_ALLOWED);
 #endif
 
 	init_waitqueue_head(&pe->wq);
@@ -584,8 +582,7 @@ static void restore_cpu_mask(struct pending_entry *pe)
 static void release_pending_entry(struct pending_entry *pe)
 {
 #ifdef CONFIG_TA_AFFINITY
-	if (!is_ccos())
-		restore_cpu_mask(pe);
+	restore_cpu_mask(pe);
 #endif
 	spin_lock(&g_pend_lock);
 	list_del(&pe->list);
@@ -607,9 +604,6 @@ static inline bool is_shadow_exit(uint64_t target)
 #ifdef CONFIG_TA_AFFINITY
 static bool match_ta_affinity(struct pending_entry *pe)
 {
-	if (is_ccos())
-		return false;
-
 	if (!cpumask_equal(CURRENT_CPUS_ALLOWED, &pe->ta_mask)) {
 		if (set_cpus_allowed_ptr(current, &pe->ta_mask)) {
 			tlogw("set %s affinity failed\n", current->comm);
@@ -652,27 +646,63 @@ bool sigkill_pending(struct task_struct *tsk)
 	return flag;
 }
 
-#if (CONFIG_CPU_AFF_NR != 0)
+#if (CONFIG_CPU_AFF_NR != 0) || (defined CONFIG_CPU_GROUP_BINDING)
+static int set_cpumask_aff(struct cpumask *mask)
+{
+	unsigned int i;
+# ifdef CONFIG_CPU_GROUP_BINDING
+	unsigned int j, threads_per_core;
+# endif
+
+# ifdef CONFIG_CPU_GROUP_BINDING
+	/**
+	 * Kunpeng 920B might contains 160 physical cores (320 logical cores with SMP on) or more.
+	 * CCOS does not support so many cores up to now.
+	 * Identify by num of CPU cores; bind to specific cores.
+	 */
+	threads_per_core = cpumask_weight(topology_sibling_cpumask(smp_processor_id()));
+	if (nr_cpu_ids > CONFIG_MAX_TEE_CORE * threads_per_core) {
+		cpumask_clear(mask);
+		for (j = 0; j < CONFIG_NUM_DIE; j++)
+			for (i = 0; i < CONFIG_NUM_TEE_PHY_CORE_PER_DIE * threads_per_core; i++)
+				cpumask_set_cpu(i + j * CONFIG_NUM_PHY_CORE_PER_DIE * threads_per_core, mask);
+		return 1;
+	}
+# endif
+
+# if (CONFIG_CPU_AFF_NR != 0)
+	cpumask_clear(mask);
+	for (i = 0; i < CONFIG_CPU_AFF_NR; i++)
+		cpumask_set_cpu(i, mask);
+	return 1;
+# endif
+
+	return 0;
+}
+#endif
+
+#if (CONFIG_CPU_AFF_NR != 0) || (defined CONFIG_CPU_GROUP_BINDING)
 static void set_cpu_strategy(struct cpumask *old_mask)
 {
 	unsigned int i;
 
 	if (g_mask_flag == 0) {
-		cpumask_clear(&g_cpu_mask);
-		for (i = 0; i < CONFIG_CPU_AFF_NR; i++)
-			cpumask_set_cpu(i, &g_cpu_mask);
+		if (!set_cpumask_aff(&g_cpu_mask))
+			return;
+
 		g_mask_flag = 1;
 	}
+
 	cpumask_copy(old_mask, CURRENT_CPUS_ALLOWED);
 	set_cpus_allowed_ptr(current, &g_cpu_mask);
 }
 #endif
 
-#if (CONFIG_CPU_AFF_NR != 0)
+#if (CONFIG_CPU_AFF_NR != 0) || (defined CONFIG_CPU_GROUP_BINDING)
 static void restore_cpu(struct cpumask *old_mask)
 {
 	/* current equal old means no set cpu affinity, no need to restore */
-	if (cpumask_equal(CURRENT_CPUS_ALLOWED, old_mask))
+	if (g_mask_flag == 0 || cpumask_equal(CURRENT_CPUS_ALLOWED, old_mask))
 		return;
 
 	set_cpus_allowed_ptr(current, old_mask);
@@ -728,7 +758,7 @@ static void send_smc_cmd(struct smc_in_params *in_param,
 static void send_smc_cmd_with_retry(struct smc_in_params *in_param,
 	struct smc_out_params *out_param)
 {
-#if (CONFIG_CPU_AFF_NR != 0)
+#if (CONFIG_CPU_AFF_NR != 0) || (defined CONFIG_CPU_GROUP_BINDING)
 	struct cpumask old_mask;
 	set_cpu_strategy(&old_mask);
 #endif
@@ -744,7 +774,7 @@ retry:
 		in_param->x1 = SMC_OPS_SCHEDTO;
 		goto retry;
 	}
-#if (CONFIG_CPU_AFF_NR != 0)
+#if (CONFIG_CPU_AFF_NR != 0) || (defined CONFIG_CPU_GROUP_BINDING)
 	restore_cpu(&old_mask);
 #endif
 }
@@ -802,11 +832,11 @@ static noinline int smp_smc_send(struct smc_send_param param,
 {
 	struct smc_in_params in_param = { param.cmd, param.ops, param.ca, 0, 0 };
 	struct smc_out_params out_param = {0};
-#if (CONFIG_CPU_AFF_NR != 0)
+#if (CONFIG_CPU_AFF_NR != 0) || (defined CONFIG_CPU_GROUP_BINDING)
 	struct cpumask old_mask;
 #endif
 
-#if (CONFIG_CPU_AFF_NR != 0)
+#if (CONFIG_CPU_AFF_NR != 0) || (defined CONFIG_CPU_GROUP_BINDING)
 	set_cpu_strategy(&old_mask);
 #endif
 retry:
@@ -841,7 +871,7 @@ retry:
 			goto retry;
 		}
 	}
-#if (CONFIG_CPU_AFF_NR != 0)
+#if (CONFIG_CPU_AFF_NR != 0) || (defined CONFIG_CPU_GROUP_BINDING)
 	restore_cpu(&old_mask);
 #endif
 	return (int)out_param.ret;
@@ -853,14 +883,14 @@ static unsigned long raw_smc_send(uint32_t cmd, uint32_t param1,
 	struct smc_in_params in_param = {cmd, param1, param2};
 	struct smc_out_params out_param = {0};
 
-#if (CONFIG_CPU_AFF_NR != 0)
+#if (CONFIG_CPU_AFF_NR != 0) || (defined CONFIG_CPU_GROUP_BINDING)
 	struct cpumask old_mask;
 	set_cpu_strategy(&old_mask);
 #endif
 
 	send_smc_cmd(&in_param, &out_param, wait);
 
-#if (CONFIG_CPU_AFF_NR != 0)
+#if (CONFIG_CPU_AFF_NR != 0) || (defined CONFIG_CPU_GROUP_BINDING)
 	restore_cpu(&old_mask);
 #endif
 	return out_param.ret;
