@@ -346,6 +346,11 @@ int check_teecd_auth(void)
 #ifdef CONFIG_TEE_TELEPORT_AUTH
 int check_tee_teleport_auth(void)
 {
+    int ret = check_proc_uid_path(TEE_TELEPORT_PATH_UID_AUTH_CTX);
+    if (ret != CHECK_ACCESS_SUCC) {
+        tloge("check teleport path failed, ret %d\n", ret);
+        return ret;
+    }
 #if defined(CONFIG_SELINUX_AUTH_ENABLE) && defined(CONFIG_SECURITY_SELINUX)
 	int ret = check_proc_selinux_access(SELINUX_TEE_TELEPORT_LABEL);
 	if (ret != 0) {
