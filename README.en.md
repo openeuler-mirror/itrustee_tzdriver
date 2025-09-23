@@ -21,6 +21,7 @@ tzdriver
 2) cd tzdriver
 3) make -C libboundscheck
 4) make
+   For 920 new models use this command instead：`make CPU_GROUP_BINDING=y`
 then you will see tzdriver.ko under the folder "tzdriver"
 
 4.Run
