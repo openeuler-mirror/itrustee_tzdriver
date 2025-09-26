@@ -29,6 +29,7 @@ itrustee_tzdriver
 5）make -C libboundscheck。
 
 6）make 编译出tzdriver.ko文件。
+   鲲鹏920新型号使用命令：`make CPU_GROUP_BINDING=y`
 
 #### 使用说明
 
