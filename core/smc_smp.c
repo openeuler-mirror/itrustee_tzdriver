@@ -651,21 +651,26 @@ static int set_cpumask_aff(struct cpumask *mask)
 {
 	unsigned int i;
 # ifdef CONFIG_CPU_GROUP_BINDING
-	unsigned int j, threads_per_core;
+	unsigned int j, threads_per_core, nr_dies, phy_core_per_die;
+	unsigned int nr_die_binded, nr_core_binded;
 # endif
 
 # ifdef CONFIG_CPU_GROUP_BINDING
 	/**
-	 * Kunpeng 920B might contains 160 physical cores (320 logical cores with SMP on) or more.
-	 * CCOS does not support so many cores up to now.
-	 * Identify by num of CPU cores; bind to specific cores.
+	 * iTrustee-Server supports only 4 dies, 32 phy cores per die and 2 threads per phy core.
+	 * Identify by num of CPU cores and cpu topology; bind to those specific cores when detected redundance.
 	 */
 	threads_per_core = cpumask_weight(topology_sibling_cpumask(smp_processor_id()));
-	if (nr_cpu_ids > CONFIG_MAX_TEE_CORE * threads_per_core) {
+	nr_dies = num_possible_nodes();
+	phy_core_per_die = nr_cpu_ids / nr_dies / threads_per_core;
+	if (phy_core_per_die > CONFIG_NUM_TEE_PHY_CORE_PER_DIE || nr_dies > CONFIG_NUM_TEE_DIE) {
+		nr_die_binded = nr_dies < CONFIG_NUM_TEE_DIE ? nr_dies : CONFIG_NUM_TEE_DIE;
+		nr_core_binded = phy_core_per_die < CONFIG_NUM_TEE_PHY_CORE_PER_DIE ? phy_core_per_die :
+			CONFIG_NUM_TEE_PHY_CORE_PER_DIE;
 		cpumask_clear(mask);
-		for (j = 0; j < CONFIG_NUM_DIE; j++)
-			for (i = 0; i < CONFIG_NUM_TEE_PHY_CORE_PER_DIE * threads_per_core; i++)
-				cpumask_set_cpu(i + j * CONFIG_NUM_PHY_CORE_PER_DIE * threads_per_core, mask);
+		for (j = 0; j < nr_die_binded; j++)
+			for (i = 0; i < nr_core_binded * threads_per_core; i++)
+				cpumask_set_cpu(i + j * phy_core_per_die * threads_per_core, mask);
 		return 1;
 	}
 # endif
