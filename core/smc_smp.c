@@ -1558,7 +1558,7 @@ static int init_for_smc_send(struct tc_ns_smc_cmd *in,
 #else
 	in->nsid = PROC_PID_INIT_INO;
 #endif
-
+    in->vmid = 0;
 	if (reuse)
 		return 0;
 
