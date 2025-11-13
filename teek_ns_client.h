@@ -194,8 +194,11 @@ struct tc_ns_smc_cmd {
 	unsigned int ca_pid; /* pid */
 	unsigned int pid;    /* tgid */
 	unsigned int nsid;
+    unsigned int vmid;  /* smp_smc_send_func will set vmid to 0, only 0 is allowed */
 	unsigned int eventindex;     /* tee audit event index for upload */
+    unsigned int res_int[3]; /* 3 is limited by size of tc_ns_smc_queue, can't exceed 3 */
 	bool started;
+    char res_chr[3]; /* 3 is limited by size of tc_ns_smc_queue, can't exceed 3 */
 } __attribute__((__packed__));
 
 /*
