@@ -465,7 +465,7 @@ void free_log_mem(uint64_t log_vaddr)
 	free_pages(log_vaddr, get_order(PAGES_LOG_MEM_LEN));
 }
 
-#define PAGES_BIG_SESSION_CMD_LEN 6
+#define PAGES_BIG_SESSION_CMD_LEN 7
 uint64_t get_cmd_mem_vaddr(void)
 {
 #ifdef CONFIG_BIG_SESSION
