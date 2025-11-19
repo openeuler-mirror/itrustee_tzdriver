@@ -26,9 +26,6 @@
 #endif
 #ifdef CONFIG_TEE_TELEPORT_SUPPORT
 #include "tee_portal.h"
-#ifdef CROSS_DOMAIN_PERF
-#include "tee_posix_proxy.h"
-#endif
 #endif
 
 #include "tee_info.h"
@@ -87,11 +84,6 @@ static int teleport_ioctl(struct file *file, unsigned int cmd, unsigned long arg
 	case TC_NS_CLIENT_IOCTL_PORTAL_WORK:
 		ret = tee_portal_work(file->private_data);
 		break;
-#ifdef CROSS_DOMAIN_PERF
-	case TC_NS_CLIENT_IOCTL_POSIX_PROXY_REGISTER_TASKLET:
-		ret = tee_posix_proxy_register_tasklet(argp, nsid);
-		break;
-#endif
 #endif
 	default:
 		tloge("invalid cmd!\n");
@@ -114,9 +106,6 @@ static long tc_cvm_ioctl(struct file *file, unsigned int cmd,
 #ifdef CONFIG_TEE_TELEPORT_SUPPORT
 	case TC_NS_CLIENT_IOCTL_PORTAL_REGISTER:
 	case TC_NS_CLIENT_IOCTL_PORTAL_WORK:
-#ifdef CROSS_DOMAIN_PERF
-	case TC_NS_CLIENT_IOCTL_POSIX_PROXY_REGISTER_TASKLET:
-#endif
 		if (check_tee_teleport_auth() == 0)
 			ret = teleport_ioctl(file, cmd, arg);
 		else
@@ -167,9 +156,6 @@ static int tc_cvm_close(struct inode *inode, struct file *file)
 #ifdef CONFIG_TEE_TELEPORT_SUPPORT
 	if (dev->portal_enabled)
 		tee_portal_unregister(file->private_data);
-#ifdef CROSS_DOMAIN_PERF
-	(void)tee_posix_proxy_unregister_all_tasklet(file->private_data);
-#endif
 #endif
 	if (is_system_agent(dev)) {
 		send_crashed_event_response_single(dev);
