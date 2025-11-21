@@ -89,9 +89,6 @@
 
 #ifdef CONFIG_TEE_TELEPORT_SUPPORT
 #include "tee_portal.h"
-#ifdef CROSS_DOMAIN_PERF
-#include "tee_posix_proxy.h"
-#endif
 #endif
 
 #include "tee_info.h"
@@ -1392,9 +1389,6 @@ static __init int tc_init(void)
 
 #ifdef CONFIG_TEE_TELEPORT_SUPPORT
 	tee_portal_init();
-#ifdef CROSS_DOMAIN_PERF
-	tee_posix_proxy_init();
-#endif
 #endif
 
 	/*
