@@ -441,8 +441,8 @@ void free_cmd_monitor(void)
 	}
 	mutex_unlock(&g_cmd_monitor_lock);
 
-	flush_delayed_work(&g_cmd_monitor_work);
-	flush_delayed_work(&g_cmd_monitor_work_archive);
+    cancel_delayed_work(&g_cmd_monitor_work);
+    cancel_delayed_work(&g_cmd_monitor_work_archive);
 	if (g_cmd_monitor_wq) {
 		flush_workqueue(g_cmd_monitor_wq);
 		destroy_workqueue(g_cmd_monitor_wq);
