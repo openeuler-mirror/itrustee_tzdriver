@@ -63,7 +63,9 @@ int fill_shared_mem_info(uint64_t start_vaddr, uint32_t pages_no,
 
 	down_read(&mm_sem_lock(current->mm));
 #if (KERNEL_VERSION(6, 6, 0) <= LINUX_VERSION_CODE)
-	page_num = get_user_pages((uintptr_t)start_vaddr, pages_no, FOLL_WRITE, pages);
+	page_num = pin_user_pages((uintptr_t)start_vaddr, pages_no, FOLL_WRITE | FOLL_LONGTERM, pages);
+#elif (KERNEL_VERSION(5, 10, 0) <= LINUX_VERSION_CODE)
+	page_num = pin_user_pages((uintptr_t)start_vaddr, pages_no, FOLL_WRITE | FOLL_LONGTERM, pages, NULL);
 #else
 	page_num = get_user_pages((uintptr_t)start_vaddr, pages_no, FOLL_WRITE, pages, NULL);
 #endif
@@ -117,7 +119,11 @@ void release_shared_mem_page(uint64_t buf, uint32_t buf_size)
 		if (page == NULL)
 			continue;
 		set_bit(PG_dirty, &page->flags);
+#if (KERNEL_VERSION(5, 10, 0) <= LINUX_VERSION_CODE)
+		unpin_user_page(page);
+#else
 		put_page(page);
+#endif
 	}
 }
 #else

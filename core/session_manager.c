@@ -112,11 +112,11 @@ void put_session_struct(struct tc_ns_session *session)
 	if (!session || !atomic_dec_and_test(&session->usage))
 		return;
 
-	if (memset_s(session, sizeof(*session), 0, sizeof(*session)) != 0)
-		tloge("Caution, memset failed!\n");
 #ifdef CONFIG_REGISTER_SHAREDMEM
 	release_session_register_sharedmem(session);
 #endif
+	if (memset_s(session, sizeof(*session), 0, sizeof(*session)) != 0)
+		tloge("Caution, memset failed!\n");
 	kfree(session);
 }
 
