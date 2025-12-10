@@ -70,6 +70,7 @@
 #include "shared_mem.h"
 #include "internal_functions.h"
 #include "smc_call.h"
+#include "auth_base_impl.h"
 
 #define PREEMPT_COUNT            10000
 #define HZ_COUNT                 10
@@ -637,8 +638,11 @@ bool sigkill_pending(struct task_struct *tsk)
 		return false;
 	}
 
-	flag = (sigismember(&tsk->pending.signal, SIGKILL) != 0) ||
-		(sigismember(&tsk->pending.signal, SIGUSR1) != 0);
+	flag = (sigismember(&tsk->pending.signal, SIGKILL) != 0);
+#if defined(CONFIG_ANDROID_HIDL) || defined(CONFIG_MDC_HAL_AUTH) || defined(CONFIG_CADAEMON_AUTH)
+	if (is_hidl_or_cadaemon())
+		flag |= (sigismember(&tsk->pending.signal, SIGUSR1) != 0);
+#endif
 
 	if (tsk->signal)
 		return flag || sigismember(&tsk->signal->shared_pending.signal,
