@@ -103,6 +103,8 @@ int check_teecd_auth(void)
 
 #endif /* CLIENT_AUTH || TEECD_AUTH */
 
+bool is_hidl_or_cadaemon(void);
+
 #ifdef CONFIG_TEE_TELEPORT_AUTH
 int check_tee_teleport_auth(void);
 #endif

@@ -343,6 +343,18 @@ int check_teecd_auth(void)
 }
 #endif
 
+bool is_hidl_or_cadaemon(void)
+{
+	bool ret = false;
+#if defined(CONFIG_ANDROID_HIDL) || defined(CONFIG_MDC_HAL_AUTH)
+	ret |= check_proc_uid_path(CA_HIDL_PATH_UID_AUTH_CTX);
+#endif
+#ifdef CONFIG_CADAEMON_AUTH
+	ret |= check_proc_uid_path(CADAEMON_PATH_UID_AUTH_CTX);
+#endif
+	return ret;
+}
+
 #ifdef CONFIG_TEE_TELEPORT_AUTH
 int check_tee_teleport_auth(void)
 {
