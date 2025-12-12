@@ -348,7 +348,7 @@ uint32_t teek_initialize_context(const char *name,
 	tlogd("open device success\n");
 	return TEEC_SUCCESS;
 }
-EXPORT_SYMBOL(teek_initialize_context);
+EXPORT_SYMBOL_TZ(teek_initialize_context);
 
 /*
  * This function finalizes an initialized TEE Context.
@@ -366,7 +366,7 @@ void teek_finalize_context(struct teec_context *context)
 	tc_ns_client_close(context->dev);
 	context->dev = NULL;
 }
-EXPORT_SYMBOL(teek_finalize_context);
+EXPORT_SYMBOL_TZ(teek_finalize_context);
 
 static bool is_oper_param_valid(const struct teec_operation *operation)
 {
@@ -570,7 +570,7 @@ uint32_t teek_open_session(struct teec_context *context,
 	}
 	return ret;
 }
-EXPORT_SYMBOL(teek_open_session);
+EXPORT_SYMBOL_TZ(teek_open_session);
 
 /*
  * This function closes an opened Session.
@@ -618,7 +618,7 @@ void teek_close_session(struct teec_session *session)
 		tloge("close session failed\n");
 	}
 }
-EXPORT_SYMBOL(teek_close_session);
+EXPORT_SYMBOL_TZ(teek_close_session);
 
 static uint32_t proc_invoke_cmd(struct teec_session *session,
 	struct tc_ns_client_context *cli_context, uint32_t *origin)
@@ -700,7 +700,7 @@ set_ori:
 		*return_origin = origin;
 	return teec_ret;
 }
-EXPORT_SYMBOL(teek_invoke_command);
+EXPORT_SYMBOL_TZ(teek_invoke_command);
 
 uint32_t teek_send_secfile(struct teec_session *session,
 	const char *file_buffer, unsigned int file_size)
@@ -719,7 +719,7 @@ uint32_t teek_send_secfile(struct teec_session *session,
 	livepatch_up_read_sem();
 	return ret;
 }
-EXPORT_SYMBOL(teek_send_secfile);
+EXPORT_SYMBOL_TZ(teek_send_secfile);
 
 TEEC_Result TEEK_SendSecfile(TEEC_Session *session,
 	const char *file_buffer, unsigned int file_size)
@@ -727,7 +727,7 @@ TEEC_Result TEEK_SendSecfile(TEEC_Session *session,
 	return (TEEC_Result)teek_send_secfile((struct teec_session *)session,
 		file_buffer, file_size);
 }
-EXPORT_SYMBOL(TEEK_SendSecfile);
+EXPORT_SYMBOL_TZ(TEEK_SendSecfile);
 
 /*
  * This function registers a block of existing Client Application memory
@@ -747,20 +747,20 @@ int TEEK_IsAgentAlive(unsigned int agent_id)
 {
 	return teek_is_agent_alive(agent_id);
 }
-EXPORT_SYMBOL(TEEK_IsAgentAlive);
+EXPORT_SYMBOL_TZ(TEEK_IsAgentAlive);
 
 TEEC_Result TEEK_InitializeContext(const char *name, TEEC_Context *context)
 {
 	return (TEEC_Result)teek_initialize_context(name,
 		(struct teec_context *)context);
 }
-EXPORT_SYMBOL(TEEK_InitializeContext);
+EXPORT_SYMBOL_TZ(TEEK_InitializeContext);
 
 void TEEK_FinalizeContext(TEEC_Context *context)
 {
 	teek_finalize_context((struct teec_context *)context);
 }
-EXPORT_SYMBOL(TEEK_FinalizeContext);
+EXPORT_SYMBOL_TZ(TEEK_FinalizeContext);
 
 /*
  * Function: TEEK_OpenSession
@@ -785,13 +785,13 @@ TEEC_Result TEEK_OpenSession(TEEC_Context *context, TEEC_Session *session,
 		(const struct teec_uuid *)destination, connectionMethod, connectionData,
 		(struct teec_operation *)operation, returnOrigin);
 }
-EXPORT_SYMBOL(TEEK_OpenSession);
+EXPORT_SYMBOL_TZ(TEEK_OpenSession);
 
 void TEEK_CloseSession(TEEC_Session *session)
 {
 	teek_close_session((struct teec_session *)session);
 }
-EXPORT_SYMBOL(TEEK_CloseSession);
+EXPORT_SYMBOL_TZ(TEEK_CloseSession);
 
 TEEC_Result TEEK_InvokeCommand(TEEC_Session *session, uint32_t commandID,
 	TEEC_Operation *operation, uint32_t *returnOrigin)
@@ -800,6 +800,6 @@ TEEC_Result TEEK_InvokeCommand(TEEC_Session *session, uint32_t commandID,
 		(struct teec_session *)session, commandID,
 		(struct teec_operation *)operation, returnOrigin);
 }
-EXPORT_SYMBOL(TEEK_InvokeCommand);
+EXPORT_SYMBOL_TZ(TEEK_InvokeCommand);
 
 /* end: for KERNEL-HAL out interface */

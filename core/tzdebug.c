@@ -185,7 +185,7 @@ int get_tee_meminfo(struct tee_mem *meminfo)
 
 	return 0;
 }
-EXPORT_SYMBOL(get_tee_meminfo);
+EXPORT_SYMBOL_TZ(get_tee_meminfo);
 
 static void send_dump_task_state(void)
 {

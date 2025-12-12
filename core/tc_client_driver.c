@@ -1208,7 +1208,11 @@ static int enable_dev_nodes(void)
 	return 0;
 }
 
+#if (KERNEL_VERSION(6, 6, 0) <= LINUX_VERSION_CODE)
+static char *tee_devnode(const struct device *dev, umode_t *mode)
+#else
 static char *tee_devnode(struct device *dev, umode_t *mode)
+#endif
 {
     if (!dev || !mode)
         return NULL;
