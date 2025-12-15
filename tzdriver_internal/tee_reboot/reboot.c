@@ -236,7 +236,7 @@ int teek_register_alarm_func(tee_alarm_func alarm_func)
 	g_tee_alarm_func = alarm_func;
 	return 0;
 }
-EXPORT_SYMBOL(teek_register_alarm_func);
+EXPORT_SYMBOL_TZ(teek_register_alarm_func);
 
 void get_teecd_pid(void)
 {
@@ -348,7 +348,7 @@ err:
 	return ret;
 }
 #ifdef CONFIG_TEE_UPGRADE
-EXPORT_SYMBOL(tee_reboot);
+EXPORT_SYMBOL_TZ(tee_reboot);
 #endif
 
 static struct task_struct *g_reboot_thread;

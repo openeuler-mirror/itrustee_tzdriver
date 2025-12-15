@@ -265,4 +265,10 @@ struct tc_op_params {
 	bool op_inited;
 };
 
+#if (defined CONFIG_EXPORT_BY_GPL) || (KERNEL_VERSION(6, 6, 0) <= LINUX_VERSION_CODE)
+#define EXPORT_SYMBOL_TZ EXPORT_SYMBOL_GPL
+#else
+#define EXPORT_SYMBOL_TZ EXPORT_SYMBOL
+#endif
+
 #endif

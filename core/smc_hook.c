@@ -28,7 +28,7 @@ void register_smc_hook(void (*pre_hook)(void *), void (*post_hook)(void *))
 	g_smc_hooks.smc_pre_hook = pre_hook;
 	g_smc_hooks.smc_post_hook = post_hook;
 }
-EXPORT_SYMBOL(register_smc_hook);
+EXPORT_SYMBOL_TZ(register_smc_hook);
 
 void call_smc_pre_hook(unsigned int cmd_id)
 {

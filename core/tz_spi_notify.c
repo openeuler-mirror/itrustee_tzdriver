@@ -585,7 +585,7 @@ int TC_NS_RegisterServiceCallbackFunc(const char *uuid, void *func,
 	return tc_ns_register_service_call_back_func(uuid_in,
 		func, private_data);
 }
-EXPORT_SYMBOL(TC_NS_RegisterServiceCallbackFunc);
+EXPORT_SYMBOL_TZ(TC_NS_RegisterServiceCallbackFunc);
 
 int send_notify_cmd(unsigned int cmd_id)
 {
