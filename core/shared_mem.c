@@ -118,7 +118,7 @@ void release_shared_mem_page(uint64_t buf, uint32_t buf_size)
 		page = (struct page *)(uintptr_t)phys_to_page(phys_addr[i]);
 		if (page == NULL)
 			continue;
-		set_bit(PG_dirty, &page->flags);
+		set_page_dirty_lock(page);
 #if (KERNEL_VERSION(5, 10, 0) <= LINUX_VERSION_CODE)
 		unpin_user_page(page);
 #else
