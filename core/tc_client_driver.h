@@ -45,8 +45,8 @@ struct tc_ns_dev_list *get_dev_list(void);
 struct tc_ns_dev_file *tc_find_dev_file(unsigned int dev_file_id);
 int tc_ns_client_open(struct tc_ns_dev_file **dev_file, uint8_t kernel_api);
 int tc_ns_client_close(struct tc_ns_dev_file *dev);
-int is_agent_alive(unsigned int agent_id, unsigned int nsid);
-int tc_ns_register_host_nsid(void);
+int is_agent_alive(unsigned int agent_id, unsigned int nsid, unsigned int vmid);
+int tc_ns_register_host_nsid_vmid(void);
 int init_dev_node(struct dev_node *node, const char *node_name,
 		struct class *driver_class, const struct file_operations *fops);
 void destory_dev_node(struct dev_node *node, struct class *driver_class);
