@@ -315,7 +315,7 @@ uint32_t teek_check_operation(const struct teec_operation *operation)
 int teek_is_agent_alive(unsigned int agent_id)
 {
 	if (!get_tz_init_flag()) return EFAULT;
-	return is_agent_alive(agent_id, PROC_PID_INIT_INO);
+	return is_agent_alive(agent_id, PROC_PID_INIT_INO, 0);
 }
 
 /*
