@@ -321,10 +321,7 @@ int tc_ns_late_init(const struct tc_ns_dev_file *dev_file,
 	smc_cmd.operation_phys = mailbox_virt_to_phys((uintptr_t)&mb_pack->operation);
 	smc_cmd.operation_h_phys =
 		(uint64_t)mailbox_virt_to_phys((uintptr_t)&mb_pack->operation) >> ADDR_TRANS_NUM;
-	// 原：计算patch，根据dev_file->isVM赋值nsid&vmid；
-	// 现：计算这里不需要要根据isVM赋值，如果虚机场景set_vm_flag命令字会置位dev_file->nsid&vmid；如果非虚虚机，dev_file->nsid&vmid此处是0，发smdc_cmd时会统一检查并赋值
-    smc_cmd.nsid = dev_file->nsid;
-	smc_cmd.vmid = dev_file->vmid;
+
 	if (tc_ns_smc(&smc_cmd)) {
 		ret = -EPERM;
 		tloge("late int failed\n");
@@ -604,8 +601,7 @@ int tc_ns_wait_event(unsigned int agent_id, unsigned int nsid, unsigned int vmid
 	return ret;
 }
 
-int tc_ns_sync_sys_time(const struct tc_ns_dev_file *dev_file,
-	const struct tc_ns_client_time *tc_ns_time)
+int tc_ns_sync_sys_time(const struct tc_ns_client_time *tc_ns_time)
 {
 	struct tc_ns_smc_cmd smc_cmd = { {0}, 0 };
 	int ret = 0;
@@ -631,10 +627,6 @@ int tc_ns_sync_sys_time(const struct tc_ns_dev_file *dev_file,
 	smc_cmd.operation_phys = mailbox_virt_to_phys((uintptr_t)&mb_pack->operation);
 	smc_cmd.operation_h_phys =
 		(uint64_t)mailbox_virt_to_phys((uintptr_t)&mb_pack->operation) >> ADDR_TRANS_NUM;
-	// 原：计算patch，根据dev_file->isVM赋值nsid
-	// 现：计算这里不需要要根据isVM赋值，如果虚机场景set_vm_flag命令字会置位dev_file->nsid&vmid；如果非虚虚机，dev_file->nsid&vmid此处是0，发smdc_cmd时会统一检查并赋值
-    smc_cmd.nsid = dev_file->nsid;
-	smc_cmd.vmid = dev_file->vmid;
 	if (tc_ns_smc(&smc_cmd)) {
 		tloge("tee adjust time failed, return error\n");
 		ret = -EPERM;
@@ -952,7 +944,7 @@ int tc_ns_register_agent(struct tc_ns_dev_file *dev_file,
 	void *agent_buff = NULL;
 	uint32_t size_align;
 	uint32_t nsid = PROC_PID_INIT_INO;
-	uint32_t vmid = 0;
+	uint32_t vmid;
 
 	/* dev can be null */
 	if (!buffer)
@@ -963,13 +955,14 @@ int tc_ns_register_agent(struct tc_ns_dev_file *dev_file,
 
 	size_align = ALIGN(buffer_size, SZ_4K);
 #ifdef CONFIG_CONFIDENTIAL_CONTAINER
+	nsid = task_active_pid_ns(current)->ns.inum;
+	vmid = REE_CONTAINER_HOST_VMID;
 	if (get_ree_load_mode() == REE_VIRTUAL) {
-		nsid = dev_file->nsid;
-		vmid = dev_file->vmid;
-	} else {
-		nsid = task_active_pid_ns(current)->ns.inum;
-		if (dev_file != NULL && dev_file->nsid == 0)
-			dev_file->nsid = nsid;
+		vmid = REE_VIRTUAL_HOST_VMID;
+	}
+	if (dev_file != NULL && dev_file->nsid == 0) {
+		dev_file->nsid = nsid;
+		dev_file->nsid = vmid;
 	}
 #endif
 
