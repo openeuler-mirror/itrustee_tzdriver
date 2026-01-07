@@ -54,7 +54,7 @@
 #include "internal_functions.h"
 #include "auth_base_impl.h"
 #include "tee_compat_check.h"
-
+#include "tc_ns_client.h"
 #ifdef CONFIG_CMS_CAHASH_AUTH
 #define HASH_FILE_MAX_SIZE         CONFIG_HASH_FILE_SIZE
 #else
@@ -74,6 +74,7 @@ struct agent_control {
 struct agent_pair {
 	uint32_t agent_id;
 	uint32_t nsid;
+	uint32_t vmid;
 };
 
 static struct agent_control g_agent_control;
@@ -298,7 +299,8 @@ int tc_ns_set_native_hash(unsigned long arg, unsigned int cmd_id)
 	return ret;
 }
 
-int tc_ns_late_init(unsigned long arg)
+int tc_ns_late_init(const struct tc_ns_dev_file *dev_file,
+	unsigned long arg)
 {
 	int ret = 0;
 	struct tc_ns_smc_cmd smc_cmd = { {0}, 0 };
@@ -319,7 +321,10 @@ int tc_ns_late_init(unsigned long arg)
 	smc_cmd.operation_phys = mailbox_virt_to_phys((uintptr_t)&mb_pack->operation);
 	smc_cmd.operation_h_phys =
 		(uint64_t)mailbox_virt_to_phys((uintptr_t)&mb_pack->operation) >> ADDR_TRANS_NUM;
-
+	// 原：计算patch，根据dev_file->isVM赋值nsid&vmid；
+	// 现：计算这里不需要要根据isVM赋值，如果虚机场景set_vm_flag命令字会置位dev_file->nsid&vmid；如果非虚虚机，dev_file->nsid&vmid此处是0，发smdc_cmd时会统一检查并赋值
+    smc_cmd.nsid = dev_file->nsid;
+	smc_cmd.vmid = dev_file->vmid;
 	if (tc_ns_smc(&smc_cmd)) {
 		ret = -EPERM;
 		tloge("late int failed\n");
@@ -336,6 +341,7 @@ void send_crashed_event_response_single(const struct tc_ns_dev_file *dev_file)
 	unsigned long flags;
 	unsigned int agent_id = 0;
 	unsigned int nsid = PROC_PID_INIT_INO;
+	unsigned int vmid = 0;
 	bool need_unreg = false;
 
 	if (!dev_file)
@@ -347,6 +353,7 @@ void send_crashed_event_response_single(const struct tc_ns_dev_file *dev_file)
 		if (event_data->owner == dev_file) {
 			agent_id = event_data->agent_id;
 			nsid = event_data->nsid;
+			vmid = event_data->vmid;
 			event_data->agent_buff_user = NULL;
 			need_unreg = !(atomic_read(&event_data->agent_ready) == AGENT_PENDING) &&
 				!(atomic_read(&event_data->agent_ready) == AGENT_UNREGISTERED);
@@ -356,13 +363,13 @@ void send_crashed_event_response_single(const struct tc_ns_dev_file *dev_file)
 	spin_unlock_irqrestore(&g_agent_control.lock, flags);
 
 	if (nsid != PROC_PID_INIT_INO && need_unreg)
-		(void)tc_ns_unregister_agent(agent_id, nsid);
+		(void)tc_ns_unregister_agent(agent_id, nsid, vmid);
 
-	send_event_response(agent_id, nsid);
+	send_event_response(agent_id, nsid, vmid);
 	return;
 }
 
-struct smc_event_data *find_event_control(unsigned int agent_id, unsigned int nsid)
+struct smc_event_data *find_event_control(unsigned int agent_id, unsigned int nsid, unsigned int vmid)
 {
 	struct smc_event_data *event_data = NULL;
 	struct smc_event_data *tmp_data = NULL;
@@ -370,7 +377,7 @@ struct smc_event_data *find_event_control(unsigned int agent_id, unsigned int ns
 
 	spin_lock_irqsave(&g_agent_control.lock, flags);
 	list_for_each_entry(event_data, &g_agent_control.agent_list, head) {
-		if (event_data->agent_id == agent_id && event_data->nsid == nsid) {
+		if (event_data->agent_id == agent_id && is_same_group(nsid, vmid, event_data->nsid, event_data->vmid) == true) {
 			tmp_data = event_data;
 			get_agent_event(event_data);
 			break;
@@ -415,16 +422,16 @@ static void free_event_control(struct smc_event_data *event_data)
 }
 
 static int init_agent_context(unsigned int agent_id,
-	unsigned int nsid,
+	unsigned int nsid, unsigned int vmid,
 	const struct tc_ns_smc_cmd *smc_cmd,
 	struct smc_event_data **event_data)
 {
-	*event_data = find_event_control(agent_id, nsid);
+	*event_data = find_event_control(agent_id, nsid, vmid);
 	if (!(*event_data)) {
-		tloge("agent 0x%x nsid 0x%x not exist\n", agent_id, nsid);
+		tloge("agent 0x%x nsid 0x%x vmid 0x%x not exist\n", agent_id, nsid, vmid);
 		return -EINVAL;
 	}
-	tlogd("agent-0x%x nsid 0x%x: returning client command", agent_id, nsid);
+	tlogd("agent-0x%x nsid 0x%x vmid 0x%x: returning client command", agent_id, nsid, vmid);
 
 	if (is_tui_agent(agent_id)) {
 		tloge("TEE_TUI_AGENT_ID: pid-%d", current->pid);
@@ -501,7 +508,7 @@ wait agent response\n");
 }
 
 int agent_process_work(const struct tc_ns_smc_cmd *smc_cmd,
-	unsigned int agent_id, unsigned int nsid)
+	unsigned int agent_id, unsigned int nsid, unsigned int vmid)
 {
 	struct smc_event_data *event_data = NULL;
 	int ret;
@@ -511,19 +518,19 @@ int agent_process_work(const struct tc_ns_smc_cmd *smc_cmd,
 		return -EINVAL;
 	}
 
-	if (init_agent_context(agent_id, nsid, smc_cmd, &event_data))
+	if (init_agent_context(agent_id, nsid, vmid, smc_cmd, &event_data))
 		return -EINVAL;
 
 	if (atomic_read(&event_data->agent_ready) == AGENT_CRASHED ||
 		atomic_read(&event_data->agent_ready) == AGENT_UNREGISTERED) {
-		tloge("agent 0x%x nsid 0x%x is killed and restarting\n", agent_id, nsid);
+		tloge("agent 0x%x nsid 0x%x vmid 0x%x is killed and restarting\n", agent_id, nsid, vmid);
 		put_agent_event(event_data);
 		return -EFAULT;
 	}
 
 	if (smc_cmd->cmd_type == CMD_TYPE_RELEASE_AGENT &&
 		atomic_read(&event_data->agent_ready) == AGENT_PENDING) {
-		tlogi("agent 0x%x nsid 0x%x is ready to release\n", agent_id, nsid);
+		tlogi("agent 0x%x nsid 0x%x vmid 0x%x is ready to release\n", agent_id, nsid, vmid);
 
 		free_event_control(event_data);
 		put_agent_event(event_data);
@@ -535,8 +542,8 @@ int agent_process_work(const struct tc_ns_smc_cmd *smc_cmd,
 	/* Wake up the agent that will process the command */
 	tlogd("agent process work: wakeup the agent");
 	wake_up(&event_data->wait_event_wq);
-	tlogd("agent 0x%x nsid 0x%x request, goto sleep, pe->run=%d\n",
-	      agent_id, nsid, atomic_read(&event_data->ca_run));
+	tloge("agent 0x%x nsid 0x%x vmid 0x%x request, goto sleep, pe->run=%d\n",
+	      agent_id, nsid, vmid, atomic_read(&event_data->ca_run));
 
 	ret = wait_agent_response(event_data);
 	atomic_set(&event_data->ca_run, 0);
@@ -551,11 +558,11 @@ reset_context:
 	return ret;
 }
 
-int is_agent_alive(unsigned int agent_id, unsigned int nsid)
+int is_agent_alive(unsigned int agent_id, unsigned int nsid, unsigned int vmid)
 {
 	struct smc_event_data *event_data = NULL;
 
-	event_data = find_event_control(agent_id, nsid);
+	event_data = find_event_control(agent_id, nsid, vmid);
 	if (event_data) {
 		if (atomic_read(&event_data->agent_ready) == AGENT_CRASHED ||
 			atomic_read(&event_data->agent_ready) == AGENT_PENDING ||
@@ -570,19 +577,19 @@ int is_agent_alive(unsigned int agent_id, unsigned int nsid)
 	return AGENT_DEAD;
 }
 
-int tc_ns_wait_event(unsigned int agent_id, unsigned int nsid)
+int tc_ns_wait_event(unsigned int agent_id, unsigned int nsid, unsigned int vmid)
 {
 	int ret = -EINVAL;
 	struct smc_event_data *event_data = NULL;
 
-	tlogd("agent 0x%x nsid 0x%x waits for command\n", agent_id, nsid);
+	tloge("agent 0x%x nsid 0x%x vmid 0x%x waits for command\n", agent_id, nsid, vmid);
 
-	event_data = find_event_control(agent_id, nsid);
+	event_data = find_event_control(agent_id, nsid, vmid);
 	if (!event_data)
 		return ret;
 
 	if (atomic_read(&event_data->agent_ready) != AGENT_READY) {
-		tlogd("agent 0x%x nsid 0x%x is not in registered status\n", agent_id, nsid);
+		tlogd("agent 0x%x nsid 0x%x vmid 0x%x is not in registered status\n", agent_id, nsid, vmid);
 		put_agent_event(event_data);
 		return ret;
 	}
@@ -623,6 +630,10 @@ int tc_ns_sync_sys_time(const struct tc_ns_client_time *tc_ns_time)
 	smc_cmd.operation_phys = mailbox_virt_to_phys((uintptr_t)&mb_pack->operation);
 	smc_cmd.operation_h_phys =
 		(uint64_t)mailbox_virt_to_phys((uintptr_t)&mb_pack->operation) >> ADDR_TRANS_NUM;
+	// 原：计算patch，根据dev_file->isVM赋值nsid
+	// 现：计算这里不需要要根据isVM赋值，如果虚机场景set_vm_flag命令字会置位dev_file->nsid&vmid；如果非虚虚机，dev_file->nsid&vmid此处是0，发smdc_cmd时会统一检查并赋值
+    smc_cmd.nsid = dev_file->nsid;
+	smc_cmd.vmid = dev_file->vmid;
 	if (tc_ns_smc(&smc_cmd)) {
 		tloge("tee adjust time failed, return error\n");
 		ret = -EPERM;
@@ -632,7 +643,8 @@ int tc_ns_sync_sys_time(const struct tc_ns_client_time *tc_ns_time)
 	return ret;
 }
 
-int sync_system_time_from_user(const struct tc_ns_client_time *user_time)
+int sync_system_time_from_user(const struct tc_ns_dev_file *dev_file,
+	const struct tc_ns_client_time *user_time)
 {
 	int ret = 0;
 	struct tc_ns_client_time time = { 0 };
@@ -647,7 +659,7 @@ int sync_system_time_from_user(const struct tc_ns_client_time *user_time)
 		return -EFAULT;
 	}
 
-	ret = tc_ns_sync_sys_time(&time);
+	ret = tc_ns_sync_sys_time(dev_file, &time);
 	if (ret != 0)
 		tloge("sync system time from user failed, ret = 0x%x\n", ret);
 
@@ -665,7 +677,7 @@ void sync_system_time_from_kernel(void)
 	time.seconds = (uint32_t)kernel_time.ts.tv_sec;
 	time.millis = (uint32_t)(kernel_time.ts.tv_nsec / MS_TO_NS);
 
-	ret = tc_ns_sync_sys_time(&time);
+	ret = tc_ns_sync_sys_time(NULL, &time);
 	if (ret != 0)
 		tloge("sync system time from kernel failed, ret = 0x%x\n", ret);
 
@@ -686,32 +698,32 @@ static void process_send_event_response(struct smc_event_data *event_data, bool 
 	wake_up(&event_data->ca_pending_wq);
 }
 
-int tc_ns_send_event_response(unsigned int agent_id, unsigned int nsid)
+int tc_ns_send_event_response(unsigned int agent_id, unsigned int nsid, unsigned int vmid)
 {
 	struct smc_event_data *event_data = NULL;
 
-	event_data = find_event_control(agent_id, nsid);
+	event_data = find_event_control(agent_id, nsid, vmid);
 	if (!event_data) {
-		tlogd("agent 0x%x nsid 0x%x pre-check failed\n", agent_id, nsid);
+		tloge("agent 0x%x nsid 0x%x vmid 0x%x pre-check failed\n", agent_id, nsid, vmid);
 		return -EINVAL;
 	}
 
 	if (atomic_read(&event_data->agent_ready) != AGENT_READY) {
-		tlogd("agent 0x%x nsid 0x%x is not in registered status\n", agent_id, nsid);
+		tlogd("agent 0x%x nsid 0x%x vmid 0x%x is not in registered status\n", agent_id, nsid, vmid);
 		put_agent_event(event_data);
 		return -EINVAL;
 	}
 
-	tlogd("agent 0x%x nsid 0x%x sends answer back\n", agent_id, nsid);
+	tlogd("agent 0x%x nsid 0x%x vmid 0x%x sends answer back\n", agent_id, nsid, vmid);
 	process_send_event_response(event_data, false);
 	put_agent_event(event_data);
 
 	return 0;
 }
 
-void send_event_response(unsigned int agent_id, unsigned int nsid)
+void send_event_response(unsigned int agent_id, unsigned int nsid, unsigned int vmid)
 {
-	struct smc_event_data *event_data = find_event_control(agent_id, nsid);
+	struct smc_event_data *event_data = find_event_control(agent_id, nsid, vmid);
 
 	if (!event_data) {
 		tlogd("Can't get event_data\n");
@@ -723,7 +735,7 @@ void send_event_response(unsigned int agent_id, unsigned int nsid)
 		return;
 	}
 
-	tlogi("agent 0x%x nsid 0x%x sends answer back\n", agent_id, nsid);
+	tlogi("agent 0x%x nsid 0x%x vmid 0x%x sends answer back\n", agent_id, nsid, vmid);
 	atomic_set(&event_data->agent_ready, AGENT_CRASHED);
 	process_send_event_response(event_data, false);
 	put_agent_event(event_data);
@@ -760,6 +772,7 @@ static int create_new_agent_node(struct tc_ns_dev_file *dev_file,
 	}
 	(*event_data)->agent_id = agent_pair->agent_id;
 	(*event_data)->nsid = agent_pair->nsid;
+	(*event_data)->vmid = agent_pair->vmid;
 	(*event_data)->ret_flag = 0;
 	(*event_data)->agent_buff_kernel = *agent_buff;
 	(*event_data)->agent_buff_size = agent_buff_size;
@@ -823,7 +836,7 @@ static bool is_valid_agent(unsigned int agent_id,
 	return true;
 }
 
-static int is_agent_already_exist(unsigned int agent_id, unsigned int nsid,
+static int is_agent_already_exist(unsigned int agent_id, unsigned int nsid, unsigned int vmid,
 	struct smc_event_data **event_data, struct tc_ns_dev_file *dev_file, uint32_t *find_flag)
 {
 	unsigned long flags;
@@ -832,7 +845,7 @@ static int is_agent_already_exist(unsigned int agent_id, unsigned int nsid,
 
 	spin_lock_irqsave(&g_agent_control.lock, flags);
 	list_for_each_entry(agent_node, &g_agent_control.agent_list, head) {
-		if (agent_node->agent_id == agent_id && agent_node->nsid == nsid) {
+		if (agent_node->agent_id == agent_id && is_same_group(agent_node->nsid, agent_node->vmid, nsid, vmid) == true) {
 			if (atomic_read(&agent_node->agent_ready) != AGENT_CRASHED &&
 				atomic_read(&agent_node->agent_ready) != AGENT_PENDING) {
 				tloge("no allow agent proc to reg twice\n");
@@ -869,7 +882,7 @@ static void add_event_node_to_list(struct smc_event_data *event_data)
 	spin_unlock_irqrestore(&g_agent_control.lock, flags);
 }
 
-static int register_agent_to_tee(unsigned int agent_id, unsigned int nsid,
+static int register_agent_to_tee(unsigned int agent_id, unsigned int nsid, unsigned int vmid,
 	const void *agent_buff, uint32_t agent_buff_size)
 {
 	int ret = 0;
@@ -896,10 +909,11 @@ static int register_agent_to_tee(unsigned int agent_id, unsigned int nsid,
 		(uint64_t)mailbox_virt_to_phys((uintptr_t)&mb_pack->operation) >> ADDR_TRANS_NUM;
 	smc_cmd.agent_id = agent_id;
 	smc_cmd.nsid = nsid;
+	smc_cmd.vmid = vmid;
 
 	if (tc_ns_smc(&smc_cmd)) {
 		ret = -EPERM;
-		tloge("register agent to tee failed\n");
+		tloge("register agent to tee failed, ret = %d, nsid = 0x%x, vmid = 0x%x\n", ret, smc_cmd.nsid, smc_cmd.vmid);
 	}
 	mailbox_free(mb_pack);
 
@@ -937,6 +951,7 @@ int tc_ns_register_agent(struct tc_ns_dev_file *dev_file,
 	void *agent_buff = NULL;
 	uint32_t size_align;
 	uint32_t nsid = PROC_PID_INIT_INO;
+	uint32_t vmid = 0;
 
 	/* dev can be null */
 	if (!buffer)
@@ -947,15 +962,20 @@ int tc_ns_register_agent(struct tc_ns_dev_file *dev_file,
 
 	size_align = ALIGN(buffer_size, SZ_4K);
 #ifdef CONFIG_CONFIDENTIAL_CONTAINER
-	nsid = task_active_pid_ns(current)->ns.inum;
-	if (dev_file != NULL && dev_file->nsid == 0)
-		dev_file->nsid = nsid;
+	if (get_ree_load_mode() == REE_VIRTUAL) {
+		nsid = dev_file->nsid;
+		vmid = dev_file->vmid;
+	} else {
+		nsid = task_active_pid_ns(current)->ns.inum;
+		if (dev_file != NULL && dev_file->nsid == 0)
+			dev_file->nsid = nsid;
+	}
 #endif
 
-	if (is_agent_already_exist(agent_id, nsid, &event_data, dev_file, &find_flag))
+	if (is_agent_already_exist(agent_id, nsid, vmid, &event_data, dev_file, &find_flag))
 		return ret;
 	if (find_flag == AGENT_NO_EXIST) {
-		struct agent_pair agent_pair = { agent_id, nsid };
+		struct agent_pair agent_pair = { agent_id, nsid, vmid };
 		ret = create_new_agent_node(dev_file, &event_data,
 			&agent_pair, &agent_buff, size_align);
 		if (ret != 0)
@@ -971,7 +991,7 @@ int tc_ns_register_agent(struct tc_ns_dev_file *dev_file,
 		 * Obtain share memory which is released
 		 * in tc_ns_unregister_agent
 		 */
-		ret = register_agent_to_tee(agent_id, nsid, event_data->agent_buff_kernel, size_align);
+		ret = register_agent_to_tee(agent_id, nsid, vmid, event_data->agent_buff_kernel, size_align);
 		if (ret != 0) {
 			unmap_agent_buffer(event_data);
 			goto release_rsrc;
@@ -995,14 +1015,14 @@ release_rsrc:
 	return ret;
 }
 
-int tc_ns_unregister_agent(unsigned int agent_id, unsigned int nsid)
+int tc_ns_unregister_agent(unsigned int agent_id, unsigned int nsid, unsigned int vmid)
 {
 	struct smc_event_data *event_data = NULL;
 	int ret = 0;
 	struct tc_ns_smc_cmd smc_cmd = { {0}, 0 };
 	struct mb_cmd_pack *mb_pack = NULL;
 
-	event_data = find_event_control(agent_id, nsid);
+	event_data = find_event_control(agent_id, nsid, vmid);
 	if (!event_data || !event_data->agent_buff_kernel) {
 		tloge("agent is not found or kaddr is not allocated\n");
 		return -EINVAL;
@@ -1028,23 +1048,24 @@ int tc_ns_unregister_agent(unsigned int agent_id, unsigned int nsid)
 		(uint64_t)mailbox_virt_to_phys((uintptr_t)&mb_pack->operation) >> ADDR_TRANS_NUM;
 	smc_cmd.agent_id = agent_id;
 	smc_cmd.nsid = nsid;
+	smc_cmd.vmid = vmid;
 
 	ret = tc_ns_smc(&smc_cmd);
 	if (ret == 0) {
 		unmap_agent_buffer(event_data);
 		free_event_control(event_data);
-		tlogi("unregister agent(0x%x, 0x%x) success, and agent buffer is not used in tee\n",
-			agent_id, nsid);
+		tlogi("unregister agent(0x%x, 0x%x, 0x%x) success, and agent buffer is not used in tee\n",
+			agent_id, nsid, vmid);
 	} else if (ret == TEEC_ERROR_BUSY) {
 		ret = -EBUSY;
 		atomic_set(&(event_data->agent_ready), AGENT_PENDING);
 		unmap_agent_buffer(event_data);
 		process_send_event_response(event_data, true);
-		tlogi("unregister agent(0x%x, 0x%x) success, but agent buffer is used in tee\n",
-			agent_id, nsid);
+		tlogi("unregister agent(0x%x, 0x%x, 0x%x) success, but agent buffer is used in tee\n",
+			agent_id, nsid, vmid);
 	} else {
 		ret = -EPERM;
-		tloge("unregister agent(0x%x, 0x%x) failed\n", agent_id, nsid);
+		tloge("unregister agent(0x%x, 0x%x, 0x%x) failed\n", agent_id, nsid, vmid);
 	}
 	put_agent_event(event_data);
 	mailbox_free(mb_pack);
@@ -1080,6 +1101,7 @@ void send_crashed_event_response_all(const struct tc_ns_dev_file *dev_file)
 	struct smc_event_data *tmp = NULL;
 	unsigned int agent_id[AGENT_MAX] = {0};
 	unsigned int nsids[AGENT_MAX] = {0};
+	unsigned int vmids[AGENT_MAX] = {0};
 	bool need_unregs[AGENT_MAX] = {false};
 	unsigned int i = 0;
 	unsigned long flags;
@@ -1092,6 +1114,7 @@ void send_crashed_event_response_all(const struct tc_ns_dev_file *dev_file)
 		head) {
 		if (event_data->owner == dev_file && i < AGENT_MAX) {
 			nsids[i] = event_data->nsid;
+			vmids[i] = event_data->vmid;
 			agent_id[i] = event_data->agent_id;
 			event_data->agent_buff_user = NULL;
 			need_unregs[i++] = !(atomic_read(&event_data->agent_ready) == AGENT_PENDING) &&
@@ -1104,8 +1127,8 @@ void send_crashed_event_response_all(const struct tc_ns_dev_file *dev_file)
 		if (agent_id[i] == 0)
 			continue;
 		if (nsids[i] != PROC_PID_INIT_INO && need_unregs[i])
-			(void)tc_ns_unregister_agent(agent_id[i], nsids[i]);
-		send_event_response(agent_id[i], nsids[i]);
+			(void)tc_ns_unregister_agent(agent_id[i], nsids[i], vmids[i]);
+		send_event_response(agent_id[i], nsids[i], vmids[i]);
 	}
 
 	return;
@@ -1137,7 +1160,7 @@ static int def_tee_agent_work(void *instance)
 	agent_instance = instance;
 	while (!kthread_should_stop()) {
 		tlogd("%s agent loop++++\n", agent_instance->agent_name);
-		ret = tc_ns_wait_event(agent_instance->agent_id, PROC_PID_INIT_INO);
+		ret = tc_ns_wait_event(agent_instance->agent_id, PROC_PID_INIT_INO, 0);
 		if (ret != 0) {
 			tloge("%s wait event fail\n",
 				agent_instance->agent_name);
@@ -1149,7 +1172,7 @@ static int def_tee_agent_work(void *instance)
 				tloge("%s agent work fail\n",
 					agent_instance->agent_name);
 		}
-		ret = tc_ns_send_event_response(agent_instance->agent_id, PROC_PID_INIT_INO);
+		ret = tc_ns_send_event_response(agent_instance->agent_id, PROC_PID_INIT_INO, 0);
 		if (ret != 0) {
 			tloge("%s send event response fail\n",
 				agent_instance->agent_name);
@@ -1198,10 +1221,10 @@ static int def_tee_agent_stop(struct tee_agent_kernel_ops *agent_instance)
 {
 	int ret;
 
-	if (tc_ns_send_event_response(agent_instance->agent_id, PROC_PID_INIT_INO) != 0)
+	if (tc_ns_send_event_response(agent_instance->agent_id, PROC_PID_INIT_INO, 0) != 0)
 		tloge("failed to send response for agent 0x%x nsid 0x%x\n",
 			agent_instance->agent_id, PROC_PID_INIT_INO);
-	ret = tc_ns_unregister_agent(agent_instance->agent_id, PROC_PID_INIT_INO);
+	ret = tc_ns_unregister_agent(agent_instance->agent_id, PROC_PID_INIT_INO, 0);
 	if (ret == -EPERM)
 		tloge("failed to unregister agent 0x%x, nsid 0x%x\n",
 			agent_instance->agent_id, PROC_PID_INIT_INO);
