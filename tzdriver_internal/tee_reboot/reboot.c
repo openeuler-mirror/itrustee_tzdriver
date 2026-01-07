@@ -306,7 +306,7 @@ int tee_reboot(void)
 		goto err;
 	}
 
-	ret = tc_ns_register_host_nsid();
+	ret = tc_ns_register_host_nsid_vmid();
 	if (ret != 0) {
 		tloge("register host nsid failed, ret 0x%x\n", ret);
 		goto err;
