@@ -137,12 +137,56 @@ struct tc_ns_dev_list *get_dev_list(void)
 	return &g_tc_ns_dev_list;
 }
 
-int tc_ns_register_host_nsid(void)
+static uint32_t get_nsid(void)
+{
+	uint32_t nsid;
+
+#ifdef CONFIG_CONFIDENTIAL_CONTAINER
+	nsid = task_active_pid_ns(current)->ns.inum;
+#else
+	nsid = PROC_PID_INIT_INO;
+#endif
+	return nsid;
+}
+
+static int tc_ns_register_vm_nsid_vmid(const struct tc_ns_dev_file *dev_file, const void *argp, unsigned int cmd)
+{
+	struct tc_ns_smc_cmd smc_cmd = {{0}, 0};
+	struct_group group = { 0 };
+	if (copy_from_user(&group, argp, sizeof(struct_group))) {
+		tloge("file buf get failed \n");
+		return -EFAULT;
+	}
+	if (get_ree_load_mode() != REE_VIRTUAL || group.vmid == 0 || group.nsid == 0) {
+		tloge("ree load mode is not virtual, not allow to register vm nsid=%u, vmid=%u\n", group.vmid, group.nsid);
+		return -EINVAL;
+	}
+	smc_cmd.cmd_type = CMD_TYPE_GLOBAL;
+	smc_cmd.cmd_id = GLOBAL_CMD_ID_REGISTER_HOST_NSID_VMID;
+	if (cmd == TC_NS_CLIENT_IOCTL_UNREGISTER_VM_NSID_VMID)
+		smc_cmd.cmd_id = GLOBAL_CMD_ID_UNREGISTER_HOST_NSID_VMID;
+	smc_cmd.cmd_id = cmd;
+	smc_cmd.nsid = group.nsid;
+	smc_cmd.vmid = group.vmid;
+
+	int ret = tc_ns_smc(&smc_cmd);
+
+	if (ret != 0) {
+		ret = -EPERM;
+		tloge("smc call return error ret 0x%x\n", smc_cmd.ret_val);
+	}
+	tlogi("smc call return nsid=%u, vmid=%u, ret 0x%x\n", group.nsid, group.vmid, smc_cmd.ret_val);
+	return ret;
+}
+
+int tc_ns_register_host_nsid_vmid(void)
 {
 	struct tc_ns_smc_cmd smc_cmd = {{0}, 0};
 	int ret = 0;
 	smc_cmd.cmd_type = CMD_TYPE_GLOBAL;
-	smc_cmd.cmd_id = GLOBAL_CMD_ID_REGISTER_HOST_NSID;
+	smc_cmd.cmd_id = GLOBAL_CMD_ID_REGISTER_HOST_NSID_VMID;
+	smc_cmd.nsid = get_nsid();
+	smc_cmd.vmid = get_ree_load_mode() == REE_VIRTUAL ? REE_VIRTUAL_HOST_VMID : REE_CONTAINER_HOST_VMID;
 
 	if (is_tee_rebooting())
 		ret = send_smc_cmd_rebooting(TSP_REQUEST, &smc_cmd);
@@ -644,18 +688,6 @@ static int tc_client_mmap(struct file *filp, struct vm_area_struct *vma)
 	return ret;
 }
 
-static uint32_t get_nsid(void)
-{
-	uint32_t nsid;
-
-#ifdef CONFIG_CONFIDENTIAL_CONTAINER
-	nsid = task_active_pid_ns(current)->ns.inum;
-#else
-	nsid = PROC_PID_INIT_INO;
-#endif
-	return nsid;
-}
-
 static int ioctl_register_agent(struct tc_ns_dev_file *dev_file, unsigned long arg)
 {
 	int ret;
@@ -682,11 +714,11 @@ static int ioctl_register_agent(struct tc_ns_dev_file *dev_file, unsigned long a
 }
 
 static int ioctl_check_agent_owner(const struct tc_ns_dev_file *dev_file,
-	unsigned int agent_id, unsigned int nsid)
+	unsigned int agent_id, unsigned int nsid, unsigned int vmid)
 {
 	struct smc_event_data *event_data = NULL;
 
-	event_data = find_event_control(agent_id, nsid);
+	event_data = find_event_control(agent_id, nsid, vmid);
 	if (event_data == NULL) {
 		tloge("invalid agent id\n");
 		return -EINVAL;
@@ -720,7 +752,9 @@ int public_ioctl(const struct file *file, unsigned int cmd, unsigned long arg, b
 {
 	int ret = -EINVAL;
 	struct tc_ns_dev_file *dev_file = NULL;
-	uint32_t nsid = get_nsid();
+	uint32_t nsid = PROC_PID_INIT_INO;
+	uint32_t vmid = 0;
+	unsigned long tmp[2];
 	void *argp = (void __user *)(uintptr_t)arg;
 	if (file == NULL || file->private_data == NULL) {
 		tloge("invalid params\n");
@@ -728,27 +762,33 @@ int public_ioctl(const struct file *file, unsigned int cmd, unsigned long arg, b
 	}
 	dev_file = file->private_data;
 #ifdef CONFIG_CONFIDENTIAL_CONTAINER
-	dev_file->nsid = nsid;
+	if (get_ree_load_mode() == REE_VIRTUAL) {
+		nsid = dev_file->nsid;
+		vmid = dev_file->vmid;
+	} else {
+		dev_file->nsid = task_active_pid_ns(current)->ns.inum;
+		dev_file->vmid = 0;
+	}
 #endif
 
 	switch (cmd) {
 	case TC_NS_CLIENT_IOCTL_WAIT_EVENT:
-		if (ioctl_check_agent_owner(dev_file, (unsigned int)arg, nsid) != 0)
+		if (ioctl_check_agent_owner(dev_file, (unsigned int)arg, nsid, vmid) != 0)
 			return -EINVAL;
-		ret = tc_ns_wait_event((unsigned int)arg, nsid);
+		ret = tc_ns_wait_event((unsigned int)arg, nsid, vmid);
 		break;
 	case TC_NS_CLIENT_IOCTL_SEND_EVENT_RESPONSE:
-		if (ioctl_check_agent_owner(dev_file, (unsigned int)arg, nsid) != 0)
+		if (ioctl_check_agent_owner(dev_file, (unsigned int)arg, nsid, vmid) != 0)
 			return -EINVAL;
-		ret = tc_ns_send_event_response((unsigned int)arg, nsid);
+		ret = tc_ns_send_event_response((unsigned int)arg, nsid, vmid);
 		break;
 	case TC_NS_CLIENT_IOCTL_REGISTER_AGENT:
 		ret = ioctl_register_agent(dev_file, arg);
 		break;
 	case TC_NS_CLIENT_IOCTL_UNREGISTER_AGENT:
-		if (ioctl_check_agent_owner(dev_file, (unsigned int)arg, nsid) != 0)
+		if (ioctl_check_agent_owner(dev_file, (unsigned int)arg, nsid, vmid) != 0)
 			return -EINVAL;
-		ret = tc_ns_unregister_agent((unsigned int)arg, nsid);
+		ret = tc_ns_unregister_agent((unsigned int)arg, nsid, vmid);
 		break;
 	case TC_NS_CLIENT_IOCTL_LOAD_APP_REQ:
 		ret = tc_ns_load_secfile(file->private_data, argp, NULL, is_from_client_node);
@@ -856,6 +896,7 @@ static long tc_private_ioctl(struct file *file, unsigned int cmd,
 	int ret = -EFAULT;
 	void *argp = (void __user *)(uintptr_t)arg;
 	handle_cmd_prepare(cmd);
+	tlogi("tc_private_ioctl cmd 0x%x, nsid 0x%x, vmid 0x%x\n", cmd, ((struct tc_ns_dev_file *)(file->private_data))->nsid, ((struct tc_ns_dev_file *)(file->private_data))->vmid);
 	switch (cmd) {
 	case TC_NS_CLIENT_IOCTL_GET_TEE_VERSION:
 		ret = tc_ns_get_tee_version(file->private_data, argp);
@@ -875,6 +916,10 @@ static long tc_private_ioctl(struct file *file, unsigned int cmd,
 		ret = sync_system_time_from_user(
 			(struct tc_ns_client_time *)(uintptr_t)arg);
 		break;
+	case TC_NS_CLIENT_IOCTL_REGISTER_VM_NSID_VMID:
+	case TC_NS_CLIENT_IOCTL_UNREGISTER_VM_NSID_VMID:
+		ret = tc_ns_register_vm_nsid_vmid(file->private_data, argp, cmd);
+		break;
 	default:
 		ret = public_ioctl(file, cmd, arg, false);
 		break;
@@ -892,10 +937,12 @@ static long tc_client_ioctl(struct file *file, unsigned int cmd,
 	void *argp = (void __user *)(uintptr_t)arg;
 
 	handle_cmd_prepare(cmd);
+	tlogi("tc_client_ioctl cmd 0x%x, nsid 0x%x, vmid 0x%x\n", cmd, ((struct tc_ns_dev_file *)(file->private_data))->nsid, ((struct tc_ns_dev_file *)(file->private_data))->vmid);
 	switch (cmd) {
 	case TC_NS_CLIENT_IOCTL_SES_OPEN_REQ:
 	case TC_NS_CLIENT_IOCTL_SES_CLOSE_REQ:
 	case TC_NS_CLIENT_IOCTL_SEND_CMD_REQ:
+        tlogi("SES_OPEN_REQ=%x, SES_CLOSE_REQ=%x, SEND_CMD_REQ=%x\n", TC_NS_CLIENT_IOCTL_SES_OPEN_REQ, TC_NS_CLIENT_IOCTL_SES_CLOSE_REQ, TC_NS_CLIENT_IOCTL_SEND_CMD_REQ);
 		ret = tc_client_session_ioctl(file, cmd, arg);
 		break;
 	case TC_NS_CLIENT_IOCTL_CANCEL_CMD_REQ:
@@ -1312,7 +1359,7 @@ static int tc_teeos_init(struct device *class_dev)
 		goto release_mempool;
 	}
 
-	ret = tc_ns_register_host_nsid();
+	ret = tc_ns_register_host_nsid_vmid();
 	if (ret != 0) {
 		tloge("failed to register host nsid\n");
 		goto release_mempool;
