@@ -604,7 +604,8 @@ int tc_ns_wait_event(unsigned int agent_id, unsigned int nsid, unsigned int vmid
 	return ret;
 }
 
-int tc_ns_sync_sys_time(const struct tc_ns_client_time *tc_ns_time)
+int tc_ns_sync_sys_time(const struct tc_ns_dev_file *dev_file,
+	const struct tc_ns_client_time *tc_ns_time)
 {
 	struct tc_ns_smc_cmd smc_cmd = { {0}, 0 };
 	int ret = 0;
