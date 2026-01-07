@@ -325,6 +325,7 @@ static int tc_ns_need_load_image(const struct tc_ns_dev_file *dev_file,
 	smc_cmd.dev_file_id = dev_file->dev_file_id;
 #ifdef CONFIG_CONFIDENTIAL_CONTAINER
 	smc_cmd.nsid = dev_file->nsid;
+	smc_cmd.vmid = dev_file->vmid;
 #endif
 	smc_cmd.context_id = 0;
 	smc_cmd.operation_phys = mailbox_virt_to_phys((uintptr_t)&mb_pack->operation);
@@ -584,7 +585,7 @@ static int check_login_method(struct tc_ns_dev_file *dev_file,
 }
 
 static struct tc_ns_service *tc_ref_service_in_dev(struct tc_ns_dev_file *dev,
-	const unsigned char *uuid, int uuid_size, unsigned int nsid, bool *is_full)
+	const unsigned char *uuid, int uuid_size, unsigned int nsid, unsigned int vmid, bool *is_full)
 {
 	uint32_t i;
 
@@ -592,7 +593,7 @@ static struct tc_ns_service *tc_ref_service_in_dev(struct tc_ns_dev_file *dev,
 		return NULL;
 
 	for (i = 0; i < SERVICES_MAX_COUNT; i++) {
-		if (dev->services[i] != NULL && dev->services[i]->nsid == nsid &&
+		if (dev->services[i] != NULL && is_same_group(nsid, vmid, dev->services[i]->nsid, dev->services[i]->vmid) &&
 			memcmp(dev->services[i]->uuid, uuid, UUID_LEN) == 0) {
 			if (dev->service_ref[i] == MAX_REF_COUNT) {
 				*is_full = true;
@@ -605,7 +606,7 @@ static struct tc_ns_service *tc_ref_service_in_dev(struct tc_ns_dev_file *dev,
 	return NULL;
 }
 
-static int tc_ns_service_init(const unsigned char *uuid, uint32_t uuid_len,
+static int tc_ns_service_init(const unsigned char *uuid, uint32_t uuid_len, uint32_t nsid, uint32_t vmid,
 	struct tc_ns_service **new_service)
 {
 	int ret = 0;
@@ -625,12 +626,8 @@ static int tc_ns_service_init(const unsigned char *uuid, uint32_t uuid_len,
 		kfree(service);
 		return -EFAULT;
 	}
-
-#ifdef CONFIG_CONFIDENTIAL_CONTAINER
-	service->nsid = task_active_pid_ns(current)->ns.inum;
-#else
-	service->nsid = PROC_PID_INIT_INO;
-#endif
+	service->nsid = nsid;
+	service->vmid = vmid;
 	INIT_LIST_HEAD(&service->session_list);
 	mutex_init(&service->session_lock);
 	list_add_tail(&service->head, &g_service_list);
@@ -643,7 +640,7 @@ static int tc_ns_service_init(const unsigned char *uuid, uint32_t uuid_len,
 }
 
 static struct tc_ns_service *tc_find_service_from_all(
-	const unsigned char *uuid, uint32_t uuid_len, uint32_t nsid)
+	const unsigned char *uuid, uint32_t uuid_len, uint32_t nsid, uint32_t vmid)
 {
 	struct tc_ns_service *service = NULL;
 
@@ -651,7 +648,8 @@ static struct tc_ns_service *tc_find_service_from_all(
 		return NULL;
 
 	list_for_each_entry(service, &g_service_list, head) {
-		if (memcmp(service->uuid, uuid, sizeof(service->uuid)) == 0 && service->nsid == nsid)
+		if (memcmp(service->uuid, uuid, sizeof(service->uuid)) == 0 &&
+			is_same_group(nsid, vmid, service->nsid, service->vmid))
 			return service;
 	}
 
@@ -664,15 +662,20 @@ static struct tc_ns_service *find_service(struct tc_ns_dev_file *dev_file,
 	int ret;
 	struct tc_ns_service *service = NULL;
 	bool is_full = false;
+	unsigned int vmid = 0;
 #ifdef CONFIG_CONFIDENTIAL_CONTAINER
 	unsigned int nsid = task_active_pid_ns(current)->ns.inum;
+	if (get_ree_load_mode() == REE_VIRTUAL) {
+		nsid = dev_file->nsid;
+		vmid = dev_file->vmid;
+	}
 #else
 	unsigned int nsid = PROC_PID_INIT_INO;
 #endif
 
 	mutex_lock(&dev_file->service_lock);
 	service = tc_ref_service_in_dev(dev_file, context->uuid,
-		UUID_LEN, nsid, &is_full);
+		UUID_LEN, nsid, vmid, &is_full);
 	/* if service has been opened in this dev or ref cnt is full */
 	if (service || is_full) {
 		/*
@@ -686,7 +689,7 @@ static struct tc_ns_service *find_service(struct tc_ns_dev_file *dev_file,
 		return service;
 	}
 	mutex_lock(&g_service_list_lock);
-	service = tc_find_service_from_all(context->uuid, UUID_LEN, nsid);
+	service = tc_find_service_from_all(context->uuid, UUID_LEN, nsid, vmid);
 	/* if service has been opened in other dev */
 	if (service) {
 		get_service_struct(service);
@@ -694,7 +697,7 @@ static struct tc_ns_service *find_service(struct tc_ns_dev_file *dev_file,
 		goto add_service;
 	}
 	/* Create a new service if we couldn't find it in list */
-	ret = tc_ns_service_init(context->uuid, UUID_LEN, &service);
+	ret = tc_ns_service_init(context->uuid, UUID_LEN, nsid, vmid, &service);
 	/* unlock after init to make sure find service from all is correct */
 	mutex_unlock(&g_service_list_lock);
 	if (ret != 0) {
@@ -851,6 +854,7 @@ static int load_image_by_frame(struct load_img_params *params, unsigned int load
 		smc_cmd.dev_file_id = params->dev_file->dev_file_id;
 #ifdef CONFIG_CONFIDENTIAL_CONTAINER
 		smc_cmd.nsid = params->dev_file->nsid;
+		smc_cmd.vmid = params->dev_file->vmid;
 #endif
 		smc_ret = tc_ns_smc_skip_kill(&smc_cmd);
 		tlogd("configid=%u, ret=%d, load_flag=%d, index=%u\n",
@@ -1117,8 +1121,10 @@ int tc_ns_open_session(struct tc_ns_dev_file *dev_file,
 		goto err_free_rsrc;
 	}
 #ifdef CONFIG_CONFIDENTIAL_CONTAINER
-	if (dev_file->nsid == 0)
-		dev_file->nsid = task_active_pid_ns(current)->ns.inum;
+	if (get_ree_load_mode() == REE_CONTAINER) {
+		if (dev_file->nsid == 0)
+			dev_file->nsid = task_active_pid_ns(current)->ns.inum;
+	}
 #endif
 	ret = proc_open_session(dev_file, context, service, session, flags);
 	if (ret == 0)
