@@ -910,10 +910,10 @@ static long tc_private_ioctl(struct file *file, unsigned int cmd,
 		mutex_unlock(&g_set_ca_hash_lock);
 		break;
 	case TC_NS_CLIENT_IOCTL_LATEINIT:
-		ret = tc_ns_late_init(arg);
+		ret = tc_ns_late_init(file->private_data, arg);
 		break;
 	case TC_NS_CLIENT_IOCTL_SYC_SYS_TIME:
-		ret = sync_system_time_from_user(
+		ret = sync_system_time_from_user(file->private_data,
 			(struct tc_ns_client_time *)(uintptr_t)arg);
 		break;
 	case TC_NS_CLIENT_IOCTL_REGISTER_VM_NSID_VMID:
