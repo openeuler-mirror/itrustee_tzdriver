@@ -662,15 +662,15 @@ static struct tc_ns_service *find_service(struct tc_ns_dev_file *dev_file,
 	int ret;
 	struct tc_ns_service *service = NULL;
 	bool is_full = false;
-	unsigned int vmid = 0;
 #ifdef CONFIG_CONFIDENTIAL_CONTAINER
 	unsigned int nsid = task_active_pid_ns(current)->ns.inum;
+	unsigned int vmid = REE_CONTAINER_HOST_VMID;
 	if (get_ree_load_mode() == REE_VIRTUAL) {
-		nsid = dev_file->nsid;
-		vmid = dev_file->vmid;
+		vmid = REE_VIRTUAL_HOST_VMID;
 	}
 #else
 	unsigned int nsid = PROC_PID_INIT_INO;
+	unsigned int vmid = 0;
 #endif
 
 	mutex_lock(&dev_file->service_lock);
@@ -1120,12 +1120,18 @@ int tc_ns_open_session(struct tc_ns_dev_file *dev_file,
 		tloge("calc client auth hash failed\n");
 		goto err_free_rsrc;
 	}
+	if (dev_file->nsid == 0) {
 #ifdef CONFIG_CONFIDENTIAL_CONTAINER
-	if (get_ree_load_mode() == REE_CONTAINER) {
-		if (dev_file->nsid == 0)
-			dev_file->nsid = task_active_pid_ns(current)->ns.inum;
-	}
+		dev_file->nsid = task_active_pid_ns(current)->ns.inum;
+		dev_file->vmid = REE_CONTAINER_HOST_VMID;
+		if (get_ree_load_mode() == REE_VIRTUAL) {
+			dev_file->vmid = REE_VIRTUAL_HOST_VMID;
+		}
+#else
+		dev_file->nsid = PROC_PID_INIT_INO;
+		dev_file->vmid = REE_CONTAINER_HOST_VMID;
 #endif
+	}
 	ret = proc_open_session(dev_file, context, service, session, flags);
 	if (ret == 0)
 		goto err_clear_param;
