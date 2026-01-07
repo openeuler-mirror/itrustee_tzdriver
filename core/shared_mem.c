@@ -19,6 +19,7 @@
 #include <linux/of_device.h>
 #include <linux/of_platform.h>
 #include <linux/pagemap.h>
+#include <linux/vmalloc.h>
 #include <asm/io.h>
 #include "tc_ns_log.h"
 #include "tc_ns_client.h"

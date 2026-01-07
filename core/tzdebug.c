@@ -28,12 +28,17 @@
 #include <linux/debugfs.h>
 #include <linux/module.h>
 #include <linux/seq_file.h>
+#include <linux/version.h>
+#if (KERNEL_VERSION(6, 0, 0) <= LINUX_VERSION_CODE)
+#include <linux/stdarg.h>
+#else
 #include <stdarg.h>
-#include <linux/mm.h>
+#endif
 #include <asm/tlbflush.h>
 #include <asm/cacheflush.h>
 #include <securec.h>
 #include <asm/io.h>
+#include <linux/mm.h>
 #include "tc_ns_log.h"
 #include "tc_ns_client.h"
 #include "tc_client_driver.h"
