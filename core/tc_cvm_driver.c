@@ -53,10 +53,11 @@ static int tc_cvm_open(struct inode *inode, struct file *file)
 	ret = tc_ns_client_open(&dev, TEE_REQ_FROM_USER_MODE);
 	if (ret == 0) {
 #ifdef CONFIG_CONFIDENTIAL_CONTAINER
-	if (get_ree_load_mode() == REE_CONTAINER) {
 		dev->nsid = task_active_pid_ns(current)->ns.inum;
 		dev->vmid = 0;
-	}
+		if (get_ree_load_mode() == REE_VIRTUAL) {
+			dev->vmid = REE_VIRTUAL_HOST_VMID;
+		}
 #endif
 		file->private_data = dev;
 	}
