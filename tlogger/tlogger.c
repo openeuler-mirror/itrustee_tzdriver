@@ -95,6 +95,7 @@ uint32_t g_last_read_offset = 0;
 struct log_item {
 	unsigned char never_used[NEVER_USED_LEN];
 	unsigned int nsid;
+	unsigned int vmid;
 	unsigned short magic;
 	unsigned short reserved0;
 	uint32_t serial_no;
@@ -153,6 +154,7 @@ static LIST_HEAD(m_log_list);
 struct tlogger_group {
 	struct list_head node;
 	uint32_t nsid;
+	uint32_t vmid;
 	volatile uint32_t reader_cnt;
 	volatile uint32_t tlogf_stat;
 };
@@ -233,7 +235,7 @@ static struct log_item *get_next_log_item(const unsigned char *buffer_start,
 
 static bool check_group_compat(struct tlogger_group *group, struct log_item *item)
 {
-	if (group->nsid == item->nsid)
+	if (group->nsid == item->nsid && group->vmid == item->vmid)
 		return true;
 
 	if (group->nsid == PROC_PID_INIT_INO && item->nsid == 0)
@@ -520,12 +522,17 @@ static struct tlogger_group *get_tlogger_group(void)
 	struct tlogger_group *group = NULL;
 #ifdef CONFIG_CONFIDENTIAL_CONTAINER
 	uint32_t nsid = task_active_pid_ns(current)->ns.inum;
+	uint32_t vmid = 0;
+	if (get_ree_load_mode() == REE_VIRTUAL) {
+		vmid = REE_VIRTUAL_HOST_VMID;
+	}
 #else
 	uint32_t nsid = PROC_PID_INIT_INO;
+	uint32_t vmid = 0;
 #endif
 
 	list_for_each_entry(group, &g_reader_group_list, node) {
-		if (group->nsid == nsid)
+		if (group->nsid == nsid && group->vmid == vmid)
 			return group;
 	}
 
@@ -570,6 +577,10 @@ static void init_tlogger_group(struct tlogger_group *group)
 	group->reader_cnt = 1;
 #ifdef CONFIG_CONFIDENTIAL_CONTAINER
 	group->nsid = task_active_pid_ns(current)->ns.inum;
+	group->vmid = 0;
+	if (get_ree_load_mode() == REE_VIRTUAL) {
+		group->vmid = REE_VIRTUAL_HOST_VMID;
+	}
 #else
 	group->nsid = PROC_PID_INIT_INO;
 #endif
