@@ -233,10 +233,11 @@ enum REE_LOAD_MODE {
 
 static inline int get_ree_load_mode(void)
 {
-	if (CONFIG_REE_DEPLOY_MODE == REE_CONTAINER)
-		return REE_CONTAINER;
-	else
-		return REE_VIRTUAL;
+#ifdef VM_DEPLOY
+	return REE_VIRTUAL;
+#else
+	return REE_CONTAINER;
+#endif
 }
 
 static inline bool is_same_group(unsigned int dst_nsid, unsigned int dst_vmid, unsigned int nsid, unsigned int vmid)
