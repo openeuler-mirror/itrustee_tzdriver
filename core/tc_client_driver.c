@@ -752,8 +752,6 @@ int public_ioctl(const struct file *file, unsigned int cmd, unsigned long arg, b
 {
 	int ret = -EINVAL;
 	struct tc_ns_dev_file *dev_file = NULL;
-	uint32_t nsid = PROC_PID_INIT_INO;
-	uint32_t vmid = 0;
 	unsigned long tmp[2];
 	void *argp = (void __user *)(uintptr_t)arg;
 	if (file == NULL || file->private_data == NULL) {
@@ -761,34 +759,34 @@ int public_ioctl(const struct file *file, unsigned int cmd, unsigned long arg, b
 		return -EINVAL;
 	}
 	dev_file = file->private_data;
+	dev_file->nsid = PROC_PID_INIT_INO;
+	dev_file->vmid = 0;
 #ifdef CONFIG_CONFIDENTIAL_CONTAINER
+	dev_file->nsid = task_active_pid_ns(current)->ns.inum;
+	dev_file->vmid = REE_CONTAINER_HOST_VMID;
 	if (get_ree_load_mode() == REE_VIRTUAL) {
-		nsid = dev_file->nsid;
-		vmid = dev_file->vmid;
-	} else {
-		dev_file->nsid = task_active_pid_ns(current)->ns.inum;
-		dev_file->vmid = 0;
+		dev_file->vmid = REE_VIRTUAL_HOST_VMID;
 	}
 #endif
 
 	switch (cmd) {
 	case TC_NS_CLIENT_IOCTL_WAIT_EVENT:
-		if (ioctl_check_agent_owner(dev_file, (unsigned int)arg, nsid, vmid) != 0)
+		if (ioctl_check_agent_owner(dev_file, (unsigned int)arg, dev_file->nsid, dev_file->vmid) != 0)
 			return -EINVAL;
-		ret = tc_ns_wait_event((unsigned int)arg, nsid, vmid);
+		ret = tc_ns_wait_event((unsigned int)arg, dev_file->nsid, dev_file->vmid);
 		break;
 	case TC_NS_CLIENT_IOCTL_SEND_EVENT_RESPONSE:
-		if (ioctl_check_agent_owner(dev_file, (unsigned int)arg, nsid, vmid) != 0)
+		if (ioctl_check_agent_owner(dev_file, (unsigned int)arg, dev_file->nsid, dev_file->vmid) != 0)
 			return -EINVAL;
-		ret = tc_ns_send_event_response((unsigned int)arg, nsid, vmid);
+		ret = tc_ns_send_event_response((unsigned int)arg, dev_file->nsid, dev_file->vmid);
 		break;
 	case TC_NS_CLIENT_IOCTL_REGISTER_AGENT:
 		ret = ioctl_register_agent(dev_file, arg);
 		break;
 	case TC_NS_CLIENT_IOCTL_UNREGISTER_AGENT:
-		if (ioctl_check_agent_owner(dev_file, (unsigned int)arg, nsid, vmid) != 0)
+		if (ioctl_check_agent_owner(dev_file, (unsigned int)arg, dev_file->nsid, dev_file->vmid) != 0)
 			return -EINVAL;
-		ret = tc_ns_unregister_agent((unsigned int)arg, nsid, vmid);
+		ret = tc_ns_unregister_agent((unsigned int)arg, dev_file->nsid, dev_file->vmid);
 		break;
 	case TC_NS_CLIENT_IOCTL_LOAD_APP_REQ:
 		ret = tc_ns_load_secfile(file->private_data, argp, NULL, is_from_client_node);
