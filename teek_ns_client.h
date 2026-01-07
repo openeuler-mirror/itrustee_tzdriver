@@ -99,6 +99,7 @@ struct tc_ns_service {
 	struct mutex operation_lock; /* for session's open/close */
 	atomic_t usage;
 	unsigned int nsid;
+	unsigned int vmid;
 };
 
 #define SERVICES_MAX_COUNT 32 /* service limit can opened on 1 fd */
@@ -129,6 +130,7 @@ struct tc_ns_dev_file {
 	int load_app_flag;
 #ifdef CONFIG_CONFIDENTIAL_CONTAINER
 	uint32_t nsid;
+	uint32_t vmid;
 #endif
 	struct completion close_comp; /* for kthread close unclosed session */
 #ifdef CONFIG_TEE_TELEPORT_SUPPORT
