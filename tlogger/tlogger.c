@@ -45,7 +45,7 @@
 
 /* for log item ----------------------------------- */
 #define LOG_ITEM_MAGIC          0x5A5A
-#define LOG_ITEM_LEN_ALIGN      64
+#define LOG_ITEM_LEN_ALIGN      68
 #define LOG_ITEM_MAX_LEN        1024
 #define LOG_READ_STATUS_ERROR   0x000FFFF
 
@@ -88,7 +88,7 @@ int g_tlogcat_f = 0;
 uint32_t g_last_read_offset = 0;
 #endif
 
-#define NEVER_USED_LEN 28U
+#define NEVER_USED_LEN 24U
 #define LOG_ITEM_RESERVED_LEN 1U
 
 /* 64 byte head + user log */
