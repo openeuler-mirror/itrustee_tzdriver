@@ -972,6 +972,7 @@ static int init_smc_cmd(const struct tc_call_params *call_params,
 	smc_cmd->dev_file_id = call_params->dev->dev_file_id;
 #ifdef CONFIG_CONFIDENTIAL_CONTAINER
 	smc_cmd->nsid = call_params->dev->nsid;
+	smc_cmd->vmid = call_params->dev->vmid;
 #endif
 	smc_cmd->context_id = context->session_id;
 	smc_cmd->err_origin = context->returns.origin;
