@@ -45,7 +45,7 @@
 
 /* for log item ----------------------------------- */
 #define LOG_ITEM_MAGIC          0x5A5A
-#define LOG_ITEM_LEN_ALIGN      68
+#define LOG_ITEM_LEN_ALIGN      64
 #define LOG_ITEM_MAX_LEN        1024
 #define LOG_READ_STATUS_ERROR   0x000FFFF
 
