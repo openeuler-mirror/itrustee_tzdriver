@@ -109,6 +109,11 @@ struct log_item {
 	unsigned char log_buffer[];
 };
 
+typedef struct {
+    uint32_t nsid;
+    uint32_t vmid;
+} struct_group;
+
 /* --- for log mem --------------------------------- */
 #define TEMP_LOG_MEM_SIZE          (10 * SZ_1K)
 
@@ -517,22 +522,11 @@ void recycle_tlogcat_processes(void)
 }
 #endif
 
-static struct tlogger_group *get_tlogger_group(void)
+static struct tlogger_group *get_tlogger_group(uinit32_t nsid, uint32_t vmid)
 {
 	struct tlogger_group *group = NULL;
-#ifdef CONFIG_CONFIDENTIAL_CONTAINER
-	uint32_t nsid = task_active_pid_ns(current)->ns.inum;
-	uint32_t vmid = 0;
-	if (get_ree_load_mode() == REE_VIRTUAL) {
-		vmid = REE_VIRTUAL_HOST_VMID;
-	}
-#else
-	uint32_t nsid = PROC_PID_INIT_INO;
-	uint32_t vmid = 0;
-#endif
-
 	list_for_each_entry(group, &g_reader_group_list, node) {
-		if (group->nsid == nsid && group->vmid == vmid)
+		if (is_same_group(nsid, vmid, group->nsid, group->vmid) == true)
 			return group;
 	}
 
@@ -594,7 +588,15 @@ static int process_tlogger_open(struct inode *inode,
 	int ret;
 	struct tlogger_reader *reader = NULL;
 	struct tlogger_group *group = NULL;
-
+	uinit32_t vmid = 0;
+#ifdef CONFIG_CONFIDENTIAL_CONTAINER
+	uinit32_t nsid = task_active_pid_ns(current)->ns.inum;
+	if (get_ree_load_mode() == REE_VIRTUAL) {
+		uinit32_t vmid = REE_VIRTUAL_HOST_VMID;
+	}
+#else
+	uinit32_t nsid = PROC_PID_INIT_INO;
+#endif
 	tlogd("open logger open ++\n");
 	/* not support seek */
 	ret = nonseekable_open(inode, file);
@@ -607,7 +609,7 @@ static int process_tlogger_open(struct inode *inode,
 		return -ENODEV;
 
 	mutex_lock(&g_reader_group_mutex);
-	group = get_tlogger_group();
+	group = get_tlogger_group(nsid, vmid);
 	if (group == NULL) {
 		group = kzalloc(sizeof(*group), GFP_KERNEL);
 		if (ZERO_OR_NULL_PTR((unsigned long)(uintptr_t)group)) {
