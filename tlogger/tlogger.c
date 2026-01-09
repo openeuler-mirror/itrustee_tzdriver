@@ -240,11 +240,17 @@ static struct log_item *get_next_log_item(const unsigned char *buffer_start,
 
 static bool check_group_compat(struct tlogger_group *group, struct log_item *item)
 {
-	if (group->nsid == item->nsid && group->vmid == item->vmid)
-		return true;
-
-	if (group->nsid == PROC_PID_INIT_INO && item->nsid == 0)
-		return true;
+	if (get_ree_load_mode() == REE_VIRTUAL) {
+		if (group->nsid == item->nsid && group->vmid == item->vmid)
+			return true;
+		if (group->vmid == REE_VIRTUAL_HOST_VMID && item->vmid == 0)
+			return true;
+	} else {
+		if (group->nsid == item->nsid)
+			return true;
+		if (group->nsid == PROC_PID_INIT_INO && item->nsid == 0)
+			return true;
+	}
 
 	return false;
 }
