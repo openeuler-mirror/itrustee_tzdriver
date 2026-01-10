@@ -540,7 +540,7 @@ int agent_process_work(const struct tc_ns_smc_cmd *smc_cmd,
 	/* Wake up the agent that will process the command */
 	tlogd("agent process work: wakeup the agent");
 	wake_up(&event_data->wait_event_wq);
-	tloge("agent 0x%x nsid 0x%x vmid 0x%x request, goto sleep, pe->run=%d\n",
+	tlogd("agent 0x%x nsid 0x%x vmid 0x%x request, goto sleep, pe->run=%d\n",
 	      agent_id, nsid, vmid, atomic_read(&event_data->ca_run));
 
 	ret = wait_agent_response(event_data);
@@ -580,7 +580,7 @@ int tc_ns_wait_event(unsigned int agent_id, unsigned int nsid, unsigned int vmid
 	int ret = -EINVAL;
 	struct smc_event_data *event_data = NULL;
 
-	tloge("agent 0x%x nsid 0x%x vmid 0x%x waits for command\n", agent_id, nsid, vmid);
+	tlogd("agent 0x%x nsid 0x%x vmid 0x%x waits for command\n", agent_id, nsid, vmid);
 
 	event_data = find_event_control(agent_id, nsid, vmid);
 	if (!event_data)
@@ -701,7 +701,7 @@ int tc_ns_send_event_response(unsigned int agent_id, unsigned int nsid, unsigned
 
 	event_data = find_event_control(agent_id, nsid, vmid);
 	if (!event_data) {
-		tloge("agent 0x%x nsid 0x%x vmid 0x%x pre-check failed\n", agent_id, nsid, vmid);
+		tlogd("agent 0x%x nsid 0x%x vmid 0x%x pre-check failed\n", agent_id, nsid, vmid);
 		return -EINVAL;
 	}
 
