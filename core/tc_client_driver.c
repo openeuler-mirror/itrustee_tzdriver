@@ -874,7 +874,6 @@ static long tc_private_ioctl(struct file *file, unsigned int cmd,
 			&(((struct tc_ns_dev_file *)(file->private_data))->vmid));
 
 	handle_cmd_prepare(cmd);
-	tlogi("tc_private_ioctl cmd 0x%x, nsid 0x%x, vmid 0x%x\n", cmd, ((struct tc_ns_dev_file *)(file->private_data))->nsid, ((struct tc_ns_dev_file *)(file->private_data))->vmid);
 	switch (cmd) {
 	case TC_NS_CLIENT_IOCTL_GET_TEE_VERSION:
 		ret = tc_ns_get_tee_version(file->private_data, argp);
@@ -918,12 +917,10 @@ static long tc_client_ioctl(struct file *file, unsigned int cmd,
 			&(((struct tc_ns_dev_file *)(file->private_data))->vmid));
 
 	handle_cmd_prepare(cmd);
-	tlogi("tc_client_ioctl cmd 0x%x, nsid 0x%x, vmid 0x%x\n", cmd, ((struct tc_ns_dev_file *)(file->private_data))->nsid, ((struct tc_ns_dev_file *)(file->private_data))->vmid);
 	switch (cmd) {
 	case TC_NS_CLIENT_IOCTL_SES_OPEN_REQ:
 	case TC_NS_CLIENT_IOCTL_SES_CLOSE_REQ:
 	case TC_NS_CLIENT_IOCTL_SEND_CMD_REQ:
-        tlogi("SES_OPEN_REQ=%x, SES_CLOSE_REQ=%x, SEND_CMD_REQ=%x\n", TC_NS_CLIENT_IOCTL_SES_OPEN_REQ, TC_NS_CLIENT_IOCTL_SES_CLOSE_REQ, TC_NS_CLIENT_IOCTL_SEND_CMD_REQ);
 		ret = tc_client_session_ioctl(file, cmd, arg);
 		break;
 	case TC_NS_CLIENT_IOCTL_CANCEL_CMD_REQ:
