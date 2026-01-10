@@ -20,7 +20,9 @@
 
 #include <linux/types.h>
 #include <linux/version.h>
-
+#include <linux/pid_namespace.h>
+#include <linux/sched.h>
+#include <linux/proc_ns.h>
 #define UUID_LEN                16
 #define PARAM_NUM               4
 #define ADDR_TRANS_NUM          32
@@ -266,8 +268,18 @@ static inline int set_vmid_value(unsigned int val, unsigned int *vmid)
 
 #define REE_VIRTUAL_HOST_VMID 0xffffffff
 #define REE_CONTAINER_HOST_VMID 0
+
+static inline void init_nsid_vmid(unsigned int *nsid, unsigned int *vmid)
+{
+	*nsid = PROC_PID_INIT_INO;
+	*vmid = 0;
+#ifdef CONFIG_CONFIDENTIAL_CONTAINER
+	*nsid = task_active_pid_ns(current)->ns.inum;
+	*vmid = get_ree_load_mode() == REE_VIRTUAL ? REE_VIRTUAL_HOST_VMID : REE_CONTAINER_HOST_VMID;
 #endif
+}
 
 #endif
 
+#endif
 
