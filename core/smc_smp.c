@@ -801,14 +801,7 @@ int send_smc_cmd_rebooting(uint32_t cmd_id, const struct tc_ns_smc_cmd *in_cmd)
 			tloge("memcpy in cmd failed\n");
 			return -EFAULT;
 		}
-#ifdef CONFIG_CONFIDENTIAL_CONTAINER
-		cmd.nsid = task_active_pid_ns(current)->ns.inum;
-		cmd.vmid = get_ree_load_mode() == REE_VIRTUAL ? REE_VIRTUAL_HOST_VMID : REE_CONTAINER_HOST_VMID;
-#else
-		cmd.nsid = PROC_PID_INIT_INO;
-		cmd.vmid = 0;
-#endif
-
+		init_nsid_vmid(&cmd.nsid, &cmd.vmid);
 		cmd_index = occupy_free_smc_in_entry(&cmd);
 		if (cmd_index == -1) {
 			tloge("there's no more smc entry\n");
@@ -1411,11 +1404,10 @@ static int smp_smc_send_cmd_done(int cmd_index, struct tc_ns_smc_cmd *cmd,
 	switch (cmd->ret_val) {
 	case TEEC_PENDING2: {
 		unsigned int agent_id = cmd->agent_id;
-		unsigned int nsid = cmd->nsid;
 		/* If the agent does not exist post
 		 * the answer right back to the TEE
 		 */
-		if (agent_process_work(cmd, agent_id, nsid, cmd->vmid) != 0)
+		if (agent_process_work(cmd, agent_id, cmd->nsid, cmd->vmid) != 0)
 			tloge("agent process work failed\n");
 		return PENDING2_RETRY;
 	}
@@ -1558,15 +1550,8 @@ static int init_for_smc_send(struct tc_ns_smc_cmd *in,
 	}
 
 	in->ca_pid = (unsigned int)current->pid;
-#ifdef CONFIG_CONFIDENTIAL_CONTAINER
-	if (in->nsid == 0 || in->vmid == 0) {
-		in->nsid = task_active_pid_ns(current)->ns.inum;
-		in->vmid = get_ree_load_mode() == REE_VIRTUAL ? REE_VIRTUAL_HOST_VMID : REE_CONTAINER_HOST_VMID;
-	}
-#else
-	in->nsid = PROC_PID_INIT_INO;
-	in->vmid = 0;
-#endif
+	if (in->nsid == 0)
+		init_nsid_vmid(&in->nsid, &in->vmid);
 
 	if (reuse)
 		return 0;
