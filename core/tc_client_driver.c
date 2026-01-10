@@ -137,19 +137,7 @@ struct tc_ns_dev_list *get_dev_list(void)
 	return &g_tc_ns_dev_list;
 }
 
-static uint32_t get_nsid(void)
-{
-	uint32_t nsid;
-
-#ifdef CONFIG_CONFIDENTIAL_CONTAINER
-	nsid = task_active_pid_ns(current)->ns.inum;
-#else
-	nsid = PROC_PID_INIT_INO;
-#endif
-	return nsid;
-}
-
-static int tc_ns_register_vm_nsid_vmid(const struct tc_ns_dev_file *dev_file, const void *argp, unsigned int cmd)
+static int tc_ns_register_vm_nsid_vmid(const struct tc_ns_dev_file *dev_file, const void *argp)
 {
 	struct tc_ns_smc_cmd smc_cmd = {{0}, 0};
 	struct_group group = { 0 };
@@ -163,9 +151,6 @@ static int tc_ns_register_vm_nsid_vmid(const struct tc_ns_dev_file *dev_file, co
 	}
 	smc_cmd.cmd_type = CMD_TYPE_GLOBAL;
 	smc_cmd.cmd_id = GLOBAL_CMD_ID_REGISTER_HOST_NSID_VMID;
-	if (cmd == TC_NS_CLIENT_IOCTL_UNREGISTER_VM_NSID_VMID)
-		smc_cmd.cmd_id = GLOBAL_CMD_ID_UNREGISTER_HOST_NSID_VMID;
-	smc_cmd.cmd_id = cmd;
 	smc_cmd.nsid = group.nsid;
 	smc_cmd.vmid = group.vmid;
 
@@ -185,8 +170,7 @@ int tc_ns_register_host_nsid_vmid(void)
 	int ret = 0;
 	smc_cmd.cmd_type = CMD_TYPE_GLOBAL;
 	smc_cmd.cmd_id = GLOBAL_CMD_ID_REGISTER_HOST_NSID_VMID;
-	smc_cmd.nsid = get_nsid();
-	smc_cmd.vmid = get_ree_load_mode() == REE_VIRTUAL ? REE_VIRTUAL_HOST_VMID : REE_CONTAINER_HOST_VMID;
+	init_nsid_vmid(&smc_cmd.nsid, &smc_cmd.vmid);
 
 	if (is_tee_rebooting())
 		ret = send_smc_cmd_rebooting(TSP_REQUEST, &smc_cmd);
@@ -226,7 +210,8 @@ static int tc_ns_get_tee_version(const struct tc_ns_dev_file *dev_file,
 	smc_cmd.operation_phys = mailbox_virt_to_phys((uintptr_t)&mb_pack->operation);
 	smc_cmd.operation_h_phys =
 		(uint64_t)mailbox_virt_to_phys((uintptr_t)&mb_pack->operation) >> ADDR_TRANS_NUM;
-
+	smc_cmd.nsid = dev_file->nsid;
+	smc_cmd.vmid = dev_file->vmid;
 	if (tc_ns_smc(&smc_cmd) != 0) {
 		ret = -EPERM;
 		tloge("smc call returns error ret 0x%x\n", smc_cmd.ret_val);
@@ -713,12 +698,11 @@ static int ioctl_register_agent(struct tc_ns_dev_file *dev_file, unsigned long a
 	return ret;
 }
 
-static int ioctl_check_agent_owner(const struct tc_ns_dev_file *dev_file,
-	unsigned int agent_id, unsigned int nsid, unsigned int vmid)
+static int ioctl_check_agent_owner(const struct tc_ns_dev_file *dev_file, unsigned int agent_id)
 {
 	struct smc_event_data *event_data = NULL;
 
-	event_data = find_event_control(agent_id, nsid, vmid);
+	event_data = find_event_control(agent_id, dev_file->nsid, dev_file->vmid);
 	if (event_data == NULL) {
 		tloge("invalid agent id\n");
 		return -EINVAL;
@@ -751,42 +735,34 @@ static int ioctl_check_is_ccos(void __user *argp)
 int public_ioctl(const struct file *file, unsigned int cmd, unsigned long arg, bool is_from_client_node)
 {
 	int ret = -EINVAL;
-	struct tc_ns_dev_file *dev_file = NULL;
+	struct tc_ns_dev_file *dev_file = file->private_data;
+	uint32_t nsid = dev_file->nsid;
+	uint32_t vmid = dev_file->vmid;
 	unsigned long tmp[2];
 	void *argp = (void __user *)(uintptr_t)arg;
 	if (file == NULL || file->private_data == NULL) {
 		tloge("invalid params\n");
 		return -EINVAL;
 	}
-	dev_file = file->private_data;
-	dev_file->nsid = PROC_PID_INIT_INO;
-	dev_file->vmid = 0;
-#ifdef CONFIG_CONFIDENTIAL_CONTAINER
-	dev_file->nsid = task_active_pid_ns(current)->ns.inum;
-	dev_file->vmid = REE_CONTAINER_HOST_VMID;
-	if (get_ree_load_mode() == REE_VIRTUAL) {
-		dev_file->vmid = REE_VIRTUAL_HOST_VMID;
-	}
-#endif
 
 	switch (cmd) {
 	case TC_NS_CLIENT_IOCTL_WAIT_EVENT:
-		if (ioctl_check_agent_owner(dev_file, (unsigned int)arg, dev_file->nsid, dev_file->vmid) != 0)
+		if (ioctl_check_agent_owner(dev_file, (unsigned int)arg) != 0)
 			return -EINVAL;
-		ret = tc_ns_wait_event((unsigned int)arg, dev_file->nsid, dev_file->vmid);
+		ret = tc_ns_wait_event((unsigned int)arg, nsid, vmid);
 		break;
 	case TC_NS_CLIENT_IOCTL_SEND_EVENT_RESPONSE:
-		if (ioctl_check_agent_owner(dev_file, (unsigned int)arg, dev_file->nsid, dev_file->vmid) != 0)
+		if (ioctl_check_agent_owner(dev_file, (unsigned int)arg) != 0)
 			return -EINVAL;
-		ret = tc_ns_send_event_response((unsigned int)arg, dev_file->nsid, dev_file->vmid);
+		ret = tc_ns_send_event_response((unsigned int)arg, nsid, vmid);
 		break;
 	case TC_NS_CLIENT_IOCTL_REGISTER_AGENT:
 		ret = ioctl_register_agent(dev_file, arg);
 		break;
 	case TC_NS_CLIENT_IOCTL_UNREGISTER_AGENT:
-		if (ioctl_check_agent_owner(dev_file, (unsigned int)arg, dev_file->nsid, dev_file->vmid) != 0)
+		if (ioctl_check_agent_owner(dev_file, (unsigned int)arg) != 0)
 			return -EINVAL;
-		ret = tc_ns_unregister_agent((unsigned int)arg, dev_file->nsid, dev_file->vmid);
+		ret = tc_ns_unregister_agent((unsigned int)arg, nsid, vmid);
 		break;
 	case TC_NS_CLIENT_IOCTL_LOAD_APP_REQ:
 		ret = tc_ns_load_secfile(file->private_data, argp, NULL, is_from_client_node);
@@ -893,6 +869,10 @@ static long tc_private_ioctl(struct file *file, unsigned int cmd,
 {
 	int ret = -EFAULT;
 	void *argp = (void __user *)(uintptr_t)arg;
+	if (file != NULL && file->private_data != NULL && ((struct tc_ns_dev_file *)(file->private_data))->nsid == 0)
+		init_nsid_vmid(&(((struct tc_ns_dev_file *)(file->private_data))->nsid),
+			&(((struct tc_ns_dev_file *)(file->private_data))->vmid));
+
 	handle_cmd_prepare(cmd);
 	tlogi("tc_private_ioctl cmd 0x%x, nsid 0x%x, vmid 0x%x\n", cmd, ((struct tc_ns_dev_file *)(file->private_data))->nsid, ((struct tc_ns_dev_file *)(file->private_data))->vmid);
 	switch (cmd) {
@@ -933,6 +913,9 @@ static long tc_client_ioctl(struct file *file, unsigned int cmd,
 {
 	int ret = -EFAULT;
 	void *argp = (void __user *)(uintptr_t)arg;
+	if (file != NULL && file->private_data != NULL && ((struct tc_ns_dev_file *)(file->private_data))->nsid == 0)
+		init_nsid_vmid(&(((struct tc_ns_dev_file *)(file->private_data))->nsid),
+			&(((struct tc_ns_dev_file *)(file->private_data))->vmid));
 
 	handle_cmd_prepare(cmd);
 	tlogi("tc_client_ioctl cmd 0x%x, nsid 0x%x, vmid 0x%x\n", cmd, ((struct tc_ns_dev_file *)(file->private_data))->nsid, ((struct tc_ns_dev_file *)(file->private_data))->vmid);
