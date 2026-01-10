@@ -52,13 +52,6 @@ static int tc_cvm_open(struct inode *inode, struct file *file)
 	file->private_data = NULL;
 	ret = tc_ns_client_open(&dev, TEE_REQ_FROM_USER_MODE);
 	if (ret == 0) {
-#ifdef CONFIG_CONFIDENTIAL_CONTAINER
-		dev->nsid = task_active_pid_ns(current)->ns.inum;
-		dev->vmid = 0;
-		if (get_ree_load_mode() == REE_VIRTUAL) {
-			dev->vmid = REE_VIRTUAL_HOST_VMID;
-		}
-#endif
 		file->private_data = dev;
 	}
 	return ret;
@@ -68,17 +61,6 @@ static int teleport_ioctl(struct file *file, unsigned int cmd, unsigned long arg
 {
 	int ret = -EFAULT;
 	void *argp = (void __user *)(uintptr_t)arg;
-	uint32_t nsid;
-
-#ifdef CONFIG_CONFIDENTIAL_CONTAINER
-	nsid = task_active_pid_ns(current)->ns.inum;
-    if (file->private_data != NULL)
-	    ((struct tc_ns_dev_file *)file->private_data)->nsid = nsid;
-    else
-        return ret;
-#else
-	nsid = PROC_PID_INIT_INO;
-#endif
 
 	switch (cmd) {
 #ifdef CONFIG_TEE_TELEPORT_SUPPORT
@@ -100,6 +82,10 @@ static long tc_cvm_ioctl(struct file *file, unsigned int cmd,
 {
 	int ret = -EFAULT;
 	void *argp = (void __user *)(uintptr_t)arg;
+	if (file != NULL && file->private_data != NULL && ((struct tc_ns_dev_file *)(file->private_data))->nsid == 0)
+		init_nsid_vmid(&(((struct tc_ns_dev_file *)(file->private_data))->nsid),
+			&(((struct tc_ns_dev_file *)(file->private_data))->vmid));
+
 	handle_cmd_prepare(cmd);
 
 	switch (cmd) {
