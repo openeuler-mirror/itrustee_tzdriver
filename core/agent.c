@@ -321,7 +321,8 @@ int tc_ns_late_init(const struct tc_ns_dev_file *dev_file,
 	smc_cmd.operation_phys = mailbox_virt_to_phys((uintptr_t)&mb_pack->operation);
 	smc_cmd.operation_h_phys =
 		(uint64_t)mailbox_virt_to_phys((uintptr_t)&mb_pack->operation) >> ADDR_TRANS_NUM;
-
+	smc_cmd.nsid = dev_file->nsid;
+	smc_cmd.vmid = dev_file->vmid;
 	if (tc_ns_smc(&smc_cmd)) {
 		ret = -EPERM;
 		tloge("late int failed\n");
@@ -601,7 +602,8 @@ int tc_ns_wait_event(unsigned int agent_id, unsigned int nsid, unsigned int vmid
 	return ret;
 }
 
-int tc_ns_sync_sys_time(const struct tc_ns_client_time *tc_ns_time)
+int tc_ns_sync_sys_time(const struct tc_ns_dev_file *dev_file,
+	const struct tc_ns_client_time *tc_ns_time)
 {
 	struct tc_ns_smc_cmd smc_cmd = { {0}, 0 };
 	int ret = 0;
@@ -627,6 +629,8 @@ int tc_ns_sync_sys_time(const struct tc_ns_client_time *tc_ns_time)
 	smc_cmd.operation_phys = mailbox_virt_to_phys((uintptr_t)&mb_pack->operation);
 	smc_cmd.operation_h_phys =
 		(uint64_t)mailbox_virt_to_phys((uintptr_t)&mb_pack->operation) >> ADDR_TRANS_NUM;
+	smc_cmd.nsid = dev_file->nsid;
+	smc_cmd.vmid = dev_file->vmid;
 	if (tc_ns_smc(&smc_cmd)) {
 		tloge("tee adjust time failed, return error\n");
 		ret = -EPERM;
@@ -829,13 +833,14 @@ static bool is_valid_agent(unsigned int agent_id,
 	return true;
 }
 
-static int is_agent_already_exist(unsigned int agent_id, unsigned int nsid, unsigned int vmid,
-	struct smc_event_data **event_data, struct tc_ns_dev_file *dev_file, uint32_t *find_flag)
+static int is_agent_already_exist(unsigned int agent_id, struct smc_event_data **event_data,
+	struct tc_ns_dev_file *dev_file, uint32_t *find_flag)
 {
 	unsigned long flags;
 	uint32_t flag = AGENT_NO_EXIST;
 	struct smc_event_data *agent_node = NULL;
-
+	uint32_t nsid = dev_file->nsid;
+	uint32_t vmid = dev_file->vmid;
 	spin_lock_irqsave(&g_agent_control.lock, flags);
 	list_for_each_entry(agent_node, &g_agent_control.agent_list, head) {
 		if (agent_node->agent_id == agent_id && is_same_group(agent_node->nsid, agent_node->vmid, nsid, vmid) == true) {
@@ -943,8 +948,8 @@ int tc_ns_register_agent(struct tc_ns_dev_file *dev_file,
 	uint32_t find_flag = AGENT_NO_EXIST;
 	void *agent_buff = NULL;
 	uint32_t size_align;
-	uint32_t nsid = PROC_PID_INIT_INO;
-	uint32_t vmid;
+	uint32_t nsid = dev_file->nsid;
+	uint32_t vmid = dev_file->vmid;
 
 	/* dev can be null */
 	if (!buffer)
@@ -954,19 +959,8 @@ int tc_ns_register_agent(struct tc_ns_dev_file *dev_file,
 		return ret;
 
 	size_align = ALIGN(buffer_size, SZ_4K);
-#ifdef CONFIG_CONFIDENTIAL_CONTAINER
-	nsid = task_active_pid_ns(current)->ns.inum;
-	vmid = REE_CONTAINER_HOST_VMID;
-	if (get_ree_load_mode() == REE_VIRTUAL) {
-		vmid = REE_VIRTUAL_HOST_VMID;
-	}
-	if (dev_file != NULL && dev_file->nsid == 0) {
-		dev_file->nsid = nsid;
-		dev_file->nsid = vmid;
-	}
-#endif
 
-	if (is_agent_already_exist(agent_id, nsid, vmid, &event_data, dev_file, &find_flag))
+	if (is_agent_already_exist(agent_id, &event_data, dev_file, &find_flag))
 		return ret;
 	if (find_flag == AGENT_NO_EXIST) {
 		struct agent_pair agent_pair = { agent_id, nsid, vmid };
@@ -1183,6 +1177,7 @@ static int def_tee_agent_run(struct tee_agent_kernel_ops *agent_instance)
 	struct tc_ns_dev_file dev = {0};
 	int ret;
 
+    init_nsid_vmid(&dev.nsid, &dev.vmid);
 	/* 1. Register agent buffer to TEE */
 	ret = tc_ns_register_agent(&dev, agent_instance->agent_id,
 		agent_instance->agent_buff_size, &agent_instance->agent_buff,
