@@ -1555,7 +1555,7 @@ static int init_for_smc_send(struct tc_ns_smc_cmd *in,
 
 	if (reuse)
 		return 0;
-	tlogi("init smc cmd, nsid=%x, vmid=%x\n", in->nsid, in->vmid);
+
 	if (memcpy_s(cmd, sizeof(*cmd), in, sizeof(*in)) != EOK) {
 		tloge("memcpy in cmd failed\n");
 		release_pending_entry(*pe);
