@@ -300,7 +300,7 @@ int tc_ns_set_native_hash(unsigned long arg, unsigned int cmd_id)
 }
 
 int tc_ns_late_init(const struct tc_ns_dev_file *dev_file,
-	unsigned long arg)
+					unsigned long arg)
 {
 	int ret = 0;
 	struct tc_ns_smc_cmd smc_cmd = { {0}, 0 };
@@ -420,9 +420,9 @@ static void free_event_control(struct smc_event_data *event_data)
 }
 
 static int init_agent_context(unsigned int agent_id,
-	unsigned int nsid, unsigned int vmid,
-	const struct tc_ns_smc_cmd *smc_cmd,
-	struct smc_event_data **event_data)
+							unsigned int nsid, unsigned int vmid,
+							const struct tc_ns_smc_cmd *smc_cmd,
+							struct smc_event_data **event_data)
 {
 	*event_data = find_event_control(agent_id, nsid, vmid);
 	if (!(*event_data)) {
@@ -506,7 +506,7 @@ wait agent response\n");
 }
 
 int agent_process_work(const struct tc_ns_smc_cmd *smc_cmd,
-	unsigned int agent_id, unsigned int nsid, unsigned int vmid)
+						unsigned int agent_id, unsigned int nsid, unsigned int vmid)
 {
 	struct smc_event_data *event_data = NULL;
 	int ret;
