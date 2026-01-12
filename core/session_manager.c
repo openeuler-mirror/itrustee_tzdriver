@@ -585,7 +585,7 @@ static int check_login_method(struct tc_ns_dev_file *dev_file,
 }
 
 static struct tc_ns_service *tc_ref_service_in_dev(struct tc_ns_dev_file *dev,
-	const unsigned char *uuid, int uuid_size, unsigned int nsid, unsigned int vmid, bool *is_full)
+	const unsigned char *uuid, int uuid_size, bool *is_full)
 {
 	uint32_t i;
 
@@ -593,7 +593,8 @@ static struct tc_ns_service *tc_ref_service_in_dev(struct tc_ns_dev_file *dev,
 		return NULL;
 
 	for (i = 0; i < SERVICES_MAX_COUNT; i++) {
-		if (dev->services[i] != NULL && is_same_group(nsid, vmid, dev->services[i]->nsid, dev->services[i]->vmid) &&
+		if (dev->services[i] != NULL &&
+			is_same_group(dev->nsid, dev->vmid, dev->services[i]->nsid, dev->services[i]->vmid) &&
 			memcmp(dev->services[i]->uuid, uuid, UUID_LEN) == 0) {
 			if (dev->service_ref[i] == MAX_REF_COUNT) {
 				*is_full = true;
