@@ -116,22 +116,22 @@ void free_agent(void);
 struct smc_event_data *find_event_control(unsigned int agent_id, unsigned int nsid, unsigned int vmid);
 void send_event_response(unsigned int agent_id, unsigned int nsid, unsigned int vmid);
 int agent_process_work(const struct tc_ns_smc_cmd *smc_cmd,
-	unsigned int agent_id, unsigned int nsid, unsigned int vmid);
+						unsigned int agent_id, unsigned int nsid, unsigned int vmid);
 int is_agent_alive(unsigned int agent_id, unsigned int nsid, unsigned int vmid);
 int tc_ns_set_native_hash(unsigned long arg, unsigned int cmd_id);
 int tc_ns_late_init(const struct tc_ns_dev_file *dev_file, unsigned long arg);
 int tc_ns_register_agent(struct tc_ns_dev_file *dev_file, unsigned int agent_id,
-	unsigned int buffer_size, void **buffer, bool user_agent);
+						unsigned int buffer_size, void **buffer, bool user_agent);
 int tc_ns_unregister_agent(unsigned int agent_id, unsigned int nsid, unsigned int vmid);
 void send_crashed_event_response_all(const struct tc_ns_dev_file *dev_file);
 int tc_ns_wait_event(unsigned int agent_id, unsigned int nsid, unsigned int vmid);
 int tc_ns_send_event_response(unsigned int agent_id, unsigned int nsid, unsigned int vmid);
 void send_crashed_event_response_single(const struct tc_ns_dev_file *dev_file);
 int sync_system_time_from_user(const struct tc_ns_dev_file *dev_file,
-	const struct tc_ns_client_time *user_time);
+								const struct tc_ns_client_time *user_time);
 void sync_system_time_from_kernel(void);
 int tee_agent_clear_work(struct tc_ns_client_context *context,
-	unsigned int dev_file_id);
+						unsigned int dev_file_id);
 int tee_agent_kernel_register(struct tee_agent_kernel_ops *new_agent);
 bool is_system_agent(const struct tc_ns_dev_file *dev_file);
 void tee_agent_clear_dev_owner(const struct tc_ns_dev_file *dev_file);
