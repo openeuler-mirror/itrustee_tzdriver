@@ -159,7 +159,6 @@ static int tc_ns_register_vm_nsid_vmid(const struct tc_ns_dev_file *dev_file, co
 	}
 
 	int ret = tc_ns_smc(&smc_cmd);
-
 	if (ret != 0) {
 		ret = -EPERM;
 		tloge("smc call return error ret 0x%x\n", smc_cmd.ret_val);
