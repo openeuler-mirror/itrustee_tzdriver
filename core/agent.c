@@ -629,8 +629,10 @@ int tc_ns_sync_sys_time(const struct tc_ns_dev_file *dev_file,
 	smc_cmd.operation_phys = mailbox_virt_to_phys((uintptr_t)&mb_pack->operation);
 	smc_cmd.operation_h_phys =
 		(uint64_t)mailbox_virt_to_phys((uintptr_t)&mb_pack->operation) >> ADDR_TRANS_NUM;
-	smc_cmd.nsid = dev_file->nsid;
-	smc_cmd.vmid = dev_file->vmid;
+	if (dev_file != NULL) {
+		smc_cmd.nsid = dev_file->nsid;
+		smc_cmd.vmid = dev_file->vmid;
+	}
 	if (tc_ns_smc(&smc_cmd)) {
 		tloge("tee adjust time failed, return error\n");
 		ret = -EPERM;
