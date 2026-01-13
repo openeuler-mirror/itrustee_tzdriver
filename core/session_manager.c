@@ -668,7 +668,7 @@ static struct tc_ns_service *find_service(struct tc_ns_dev_file *dev_file,
 
 	mutex_lock(&dev_file->service_lock);
 	service = tc_ref_service_in_dev(dev_file, context->uuid,
-		UUID_LEN, nsid, vmid, &is_full);
+		UUID_LEN, &is_full);
 	/* if service has been opened in this dev or ref cnt is full */
 	if (service || is_full) {
 		/*
