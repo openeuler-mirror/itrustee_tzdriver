@@ -738,15 +738,16 @@ static int ioctl_check_is_ccos(void __user *argp)
 int public_ioctl(const struct file *file, unsigned int cmd, unsigned long arg, bool is_from_client_node)
 {
 	int ret = -EINVAL;
-	struct tc_ns_dev_file *dev_file = file->private_data;
-	uint32_t nsid = dev_file->nsid;
-	uint32_t vmid = dev_file->vmid;
+	struct tc_ns_dev_file *dev_file = NULL;
 	unsigned long tmp[2];
 	void *argp = (void __user *)(uintptr_t)arg;
 	if (file == NULL || file->private_data == NULL) {
 		tloge("invalid params\n");
 		return -EINVAL;
 	}
+	dev_file = file->private_data;
+	uint32_t nsid = dev_file->nsid;
+	uint32_t vmid = dev_file->vmid;
 
 	switch (cmd) {
 	case TC_NS_CLIENT_IOCTL_WAIT_EVENT:
