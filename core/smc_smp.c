@@ -1550,7 +1550,7 @@ static int init_for_smc_send(struct tc_ns_smc_cmd *in,
 	}
 
 	in->ca_pid = (unsigned int)current->pid;
-	if (in->nsid == 0 && in->vmid == 0)
+	if (in->vmid == 0)
 		init_nsid_vmid(&in->nsid, &in->vmid);
 
 	if (reuse)
