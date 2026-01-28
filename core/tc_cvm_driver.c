@@ -82,7 +82,7 @@ static long tc_cvm_ioctl(struct file *file, unsigned int cmd,
 {
 	int ret = -EFAULT;
 	void *argp = (void __user *)(uintptr_t)arg;
-	if (file != NULL && file->private_data != NULL && ((struct tc_ns_dev_file *)(file->private_data))->nsid == 0)
+	if (file != NULL && file->private_data != NULL && ((struct tc_ns_dev_file *)(file->private_data))->vmid == 0)
 		init_nsid_vmid(&(((struct tc_ns_dev_file *)(file->private_data))->nsid),
 			&(((struct tc_ns_dev_file *)(file->private_data))->vmid));
 
