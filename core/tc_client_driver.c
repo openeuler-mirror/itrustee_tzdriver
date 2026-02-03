@@ -739,7 +739,6 @@ int public_ioctl(const struct file *file, unsigned int cmd, unsigned long arg, b
 {
 	int ret = -EINVAL;
 	struct tc_ns_dev_file *dev_file = NULL;
-	unsigned long tmp[2];
 	void *argp = (void __user *)(uintptr_t)arg;
 	if (file == NULL || file->private_data == NULL) {
 		tloge("invalid params\n");
