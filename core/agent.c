@@ -1116,7 +1116,7 @@ void send_crashed_event_response_all(const struct tc_ns_dev_file *dev_file)
 	for (i = 0; i < AGENT_MAX; i++) {
 		if (agent_id[i] == 0)
 			continue;
-		if (nsids[i] != PROC_PID_INIT_INO && need_unregs[i])
+		if ((nsids[i] != PROC_PID_INIT_INO || vmids[i] != REE_VIRTUAL_HOST_VMID)&& need_unregs[i])
 			(void)tc_ns_unregister_agent(agent_id[i], nsids[i], vmids[i]);
 		send_event_response(agent_id[i], nsids[i], vmids[i]);
 	}
