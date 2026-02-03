@@ -271,11 +271,14 @@ static inline int set_vmid_value(unsigned int val, unsigned int *vmid)
 
 static inline void init_nsid_vmid(unsigned int *nsid, unsigned int *vmid)
 {
-	*nsid = PROC_PID_INIT_INO;
-	*vmid = 0;
+	if (nsid == NULL || vmid == NULL)
+		return;
 #ifdef CONFIG_CONFIDENTIAL_CONTAINER
 	*nsid = task_active_pid_ns(current)->ns.inum;
 	*vmid = get_ree_load_mode() == REE_VIRTUAL ? REE_VIRTUAL_HOST_VMID : REE_CONTAINER_HOST_VMID;
+#else
+	*nsid = PROC_PID_INIT_INO;
+	*vmid = 0;
 #endif
 }
 
