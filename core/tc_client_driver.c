@@ -145,7 +145,7 @@ static int tc_ns_operate_vm_nsid_vmid(const struct tc_ns_dev_file *dev_file, con
 		tloge("file buf get failed \n");
 		return -EFAULT;
 	}
-	if (get_ree_load_mode() != REE_VIRTUAL || group.vmid == 0) {
+	if (get_ree_load_mode() != REE_VIRTUAL || group.vmid == 0 || group.vmid == REE_VIRTUAL_HOST_VMID) {
 		tloge("ree load mode is not virtual, not allow to register vm nsid=%u, vmid=%u\n", group.vmid, group.nsid);
 		return -EINVAL;
 	}
