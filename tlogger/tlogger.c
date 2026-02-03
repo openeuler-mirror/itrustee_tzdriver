@@ -94,8 +94,8 @@ uint32_t g_last_read_offset = 0;
 /* 64 byte head + user log */
 struct log_item {
 	unsigned char never_used[NEVER_USED_LEN];
-	unsigned int nsid;
 	unsigned int vmid;
+	unsigned int nsid;
 	unsigned short magic;
 	unsigned short reserved0;
 	uint32_t serial_no;
