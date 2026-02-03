@@ -137,7 +137,7 @@ struct tc_ns_dev_list *get_dev_list(void)
 	return &g_tc_ns_dev_list;
 }
 
-static int tc_ns_register_vm_nsid_vmid(const struct tc_ns_dev_file *dev_file, const void *argp, unsigned int cmd)
+static int tc_ns_operate_vm_nsid_vmid(const struct tc_ns_dev_file *dev_file, const void *argp, unsigned int cmd)
 {
 	struct tc_ns_smc_cmd smc_cmd = {{0}, 0};
 	struct_group group = { 0 };
@@ -899,7 +899,7 @@ static long tc_private_ioctl(struct file *file, unsigned int cmd,
 		break;
 	case TC_NS_CLIENT_IOCTL_REGISTER_VM_NSID_VMID:
 	case TC_NS_CLIENT_IOCTL_UNREGISTER_VM_NSID_VMID:
-		ret = tc_ns_register_vm_nsid_vmid(file->private_data, argp, cmd);
+		ret = tc_ns_operate_vm_nsid_vmid(file->private_data, argp, cmd);
 		break;
 	default:
 		ret = public_ioctl(file, cmd, arg, false);
