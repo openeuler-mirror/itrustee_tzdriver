@@ -20,7 +20,9 @@
 
 #include <linux/types.h>
 #include <linux/version.h>
-
+#include <linux/pid_namespace.h>
+#include <linux/sched.h>
+#include <linux/proc_ns.h>
 #define UUID_LEN                16
 #define PARAM_NUM               4
 #define ADDR_TRANS_NUM          32
@@ -155,6 +157,11 @@ struct tc_ns_log_pool {
 };
 #endif
 
+typedef struct {
+	unsigned int nsid;
+	unsigned int vmid;
+} struct_group;
+
 #define MAX_SHA_256_SZ 32
 
 #define TC_NS_CLIENT_IOCTL_SES_OPEN_REQ \
@@ -210,7 +217,69 @@ struct tc_ns_log_pool {
 #define TC_NS_CLIENT_IOCTL_GET_TEE_INFO \
 	_IOWR(TC_NS_CLIENT_IOC_MAGIC, 26, struct tc_ns_tee_info)
 
+#define TC_NS_CLIENT_IOCTL_REGISTER_VM_NSID_VMID  \
+    _IOWR(TC_NS_CLIENT_IOC_MAGIC, 28, struct_group)
+#define TC_NS_CLIENT_IOCTL_UNREGISTER_VM_NSID_VMID  \
+    _IOWR(TC_NS_CLIENT_IOC_MAGIC, 29, struct_group)
 #define TC_NS_CLIENT_IOCTL_CHECK_CCOS \
 	_IOWR(TC_NS_CLIENT_IOC_MAGIC, 32, unsigned int)
+
+#ifdef CONFIG_CONFIDENTIAL_CONTAINER
+enum REE_LOAD_MODE {
+	REE_CONTAINER = 1,
+	REE_VIRTUAL = 2,
+};
+
+static inline int get_ree_load_mode(void)
+{
+#ifdef VM_DEPLOY
+	return REE_VIRTUAL;
+#else
+	return REE_CONTAINER;
+#endif
+}
+
+static inline bool is_same_group(unsigned int dst_nsid, unsigned int dst_vmid, unsigned int nsid, unsigned int vmid)
+{
+	if (get_ree_load_mode() == REE_VIRTUAL) {
+		return dst_vmid == vmid;
+	} else {
+		return dst_nsid == nsid;
+	}
+}
+
+static inline bool is_valid_vmid(unsigned int vmid)
+{
+	if (get_ree_load_mode() == REE_VIRTUAL)
+		return vmid != 0;
+	else
+		return vmid == 0;
+}
+
+static inline int set_vmid_value(unsigned int val, unsigned int *vmid)
+{
+	if (is_valid_vmid(val) == false)
+		return -1;
+	else
+		*vmid = val;
+
+	return 0;
+}
+
+#define REE_VIRTUAL_HOST_VMID 0xffffffff
+#define REE_CONTAINER_HOST_VMID 0
+
+static inline void init_nsid_vmid(unsigned int *nsid, unsigned int *vmid)
+{
+#ifdef CONFIG_CONFIDENTIAL_CONTAINER
+	*nsid = task_active_pid_ns(current)->ns.inum;
+	*vmid = get_ree_load_mode() == REE_VIRTUAL ? REE_VIRTUAL_HOST_VMID : REE_CONTAINER_HOST_VMID;
+#else
+	*nsid = PROC_PID_INIT_INO;
+	*vmid = 0;
+#endif
+}
+
+#endif
 
 #endif

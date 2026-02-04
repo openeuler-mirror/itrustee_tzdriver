@@ -585,14 +585,15 @@ static int mailbox_register(const void *mb_pool, unsigned int size)
 	smc_cmd->operation_phys = mailbox_virt_to_phys((uintptr_t)operation);
 	smc_cmd->operation_h_phys =
 		(uint64_t)mailbox_virt_to_phys((uintptr_t)operation) >> ADDR_TRANS_NUM;
-
+    smc_cmd->nsid = task_active_pid_ns(current)->ns.inum;
+    smc_cmd->vmid = get_ree_load_mode() == REE_VIRTUAL ? REE_VIRTUAL_HOST_VMID : REE_CONTAINER_HOST_VMID;
 	if (is_tee_rebooting())
 		ret = send_smc_cmd_rebooting(TSP_REQUEST, smc_cmd);
 	else
 		ret= tc_ns_smc(smc_cmd);
 
 	if (ret != 0) {
-		tloge("resigter mailbox failed\n");
+		tloge("resigter mailbox failed, ret=%d\n", ret);
 		ret = -EIO;
 	} else {
 		if (operation->params[1].value.a <= g_mb_count || g_mb_count == 0)

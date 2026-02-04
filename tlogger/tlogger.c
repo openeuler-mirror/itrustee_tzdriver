@@ -88,12 +88,13 @@ int g_tlogcat_f = 0;
 uint32_t g_last_read_offset = 0;
 #endif
 
-#define NEVER_USED_LEN 28U
+#define NEVER_USED_LEN 24U
 #define LOG_ITEM_RESERVED_LEN 1U
 
 /* 64 byte head + user log */
 struct log_item {
 	unsigned char never_used[NEVER_USED_LEN];
+	unsigned int vmid;
 	unsigned int nsid;
 	unsigned short magic;
 	unsigned short reserved0;
@@ -153,6 +154,7 @@ static LIST_HEAD(m_log_list);
 struct tlogger_group {
 	struct list_head node;
 	uint32_t nsid;
+	uint32_t vmid;
 	volatile uint32_t reader_cnt;
 	volatile uint32_t tlogf_stat;
 };
@@ -233,11 +235,17 @@ static struct log_item *get_next_log_item(const unsigned char *buffer_start,
 
 static bool check_group_compat(struct tlogger_group *group, struct log_item *item)
 {
-	if (group->nsid == item->nsid)
-		return true;
-
-	if (group->nsid == PROC_PID_INIT_INO && item->nsid == 0)
-		return true;
+	if (get_ree_load_mode() == REE_VIRTUAL) {
+		if (group->nsid == item->nsid && group->vmid == item->vmid)
+			return true;
+		if (group->vmid == REE_VIRTUAL_HOST_VMID && item->vmid == 0)
+			return true;
+	} else {
+		if (group->nsid == item->nsid)
+			return true;
+		if (group->nsid == PROC_PID_INIT_INO && item->nsid == 0)
+			return true;
+	}
 
 	return false;
 }
@@ -515,17 +523,11 @@ void recycle_tlogcat_processes(void)
 }
 #endif
 
-static struct tlogger_group *get_tlogger_group(void)
+static struct tlogger_group *get_tlogger_group(uint32_t nsid, uint32_t vmid)
 {
 	struct tlogger_group *group = NULL;
-#ifdef CONFIG_CONFIDENTIAL_CONTAINER
-	uint32_t nsid = task_active_pid_ns(current)->ns.inum;
-#else
-	uint32_t nsid = PROC_PID_INIT_INO;
-#endif
-
 	list_for_each_entry(group, &g_reader_group_list, node) {
-		if (group->nsid == nsid)
+		if (is_same_group(nsid, vmid, group->nsid, group->vmid) == true)
 			return group;
 	}
 
@@ -568,11 +570,7 @@ static void init_tlogger_reader(struct tlogger_reader *reader, struct tlogger_lo
 static void init_tlogger_group(struct tlogger_group *group)
 {
 	group->reader_cnt = 1;
-#ifdef CONFIG_CONFIDENTIAL_CONTAINER
-	group->nsid = task_active_pid_ns(current)->ns.inum;
-#else
-	group->nsid = PROC_PID_INIT_INO;
-#endif
+	init_nsid_vmid(&group->nsid, &group->vmid);
 	group->tlogf_stat = 0;
 }
 
@@ -583,7 +581,9 @@ static int process_tlogger_open(struct inode *inode,
 	int ret;
 	struct tlogger_reader *reader = NULL;
 	struct tlogger_group *group = NULL;
-
+	uint32_t nsid = 0;
+	uint32_t vmid = 0;
+	init_nsid_vmid(&nsid, &vmid);
 	tlogd("open logger open ++\n");
 	/* not support seek */
 	ret = nonseekable_open(inode, file);
@@ -596,7 +596,7 @@ static int process_tlogger_open(struct inode *inode,
 		return -ENODEV;
 
 	mutex_lock(&g_reader_group_mutex);
-	group = get_tlogger_group();
+	group = get_tlogger_group(nsid, vmid);
 	if (group == NULL) {
 		group = kzalloc(sizeof(*group), GFP_KERNEL);
 		if (ZERO_OR_NULL_PTR((unsigned long)(uintptr_t)group)) {
