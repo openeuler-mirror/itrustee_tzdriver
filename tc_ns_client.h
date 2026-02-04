@@ -283,4 +283,3 @@ static inline void init_nsid_vmid(unsigned int *nsid, unsigned int *vmid)
 #endif
 
 #endif
-
