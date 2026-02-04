@@ -4,7 +4,7 @@ Tzdriver (Trustzone driver) is a Linux kernel dirver module for ARM Trustzone.
 2.Environment Prepare
 1) you need an ARM Linux server (like kunpeng920)
 2) download kernel source code to /usr/src/kernels
-3) you should download libboundscheck from https://gitee.com/openeuler/libboundscheck
+3) you should download libboundscheck from https://atomgit.com/openeuler/libboundscheck
 
 3.Compile
 1) unzip libboundscheck and move libboundscheck to tzdriver/
