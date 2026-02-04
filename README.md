@@ -9,7 +9,7 @@ iTrustee OS 非安全侧driver，支持与iTrustee OS通信。
 #### 编译教程
 1）下载tzdriver代码。
 
-2）下载libboundscheck库，下载地址<https://gitee.com/openeuler/libboundscheck> 
+2）下载libboundscheck库，下载地址<https://atomgit.com/openeuler/libboundscheck> 
 
 3）解压libboundscheck，放到源码目录：
 
