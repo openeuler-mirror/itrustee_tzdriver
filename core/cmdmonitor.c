@@ -36,6 +36,7 @@
 #include "internal_functions.h"
 #include "mailbox_mempool.h"
 #include "tlogger.h"
+#include "agent.h"
 #include "log_cfg_api.h"
 
 static int g_cmd_need_archivelog;
