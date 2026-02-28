@@ -189,7 +189,7 @@ void cmd_monitor_reset_context(void)
  */
 const int32_t g_timer_step[] = {1, 1, 1, 2, 5, 10, 40, 120, 180, 360};
 const int32_t g_timer_nums = sizeof(g_timer_step) / sizeof(int32_t);
-static void show_timeout_cmd_info(struct cmd_monitor *monitor)
+static void show_timeout_cmd_info(struct cmd_monitor *monitor, bool *has_print)
 {
 	long long timedif, timedif2;
 	struct time_spec nowtime;
@@ -206,7 +206,7 @@ static void show_timeout_cmd_info(struct cmd_monitor *monitor)
 	/* timeout to 10s, we log the teeos log, and report */
 	if ((timedif > CMD_MAX_EXECUTE_TIME * S_TO_MS) && (!monitor->is_reported)) {
 		monitor->is_reported = true;
-		tlogd("[cmd_monitor_tick] pid=%d,pname=%s,tid=%d, "
+		tlogw("[cmd_monitor_tick] pid=%d,pname=%s,tid=%d, "
 			"tname=%s, lastcmdid=%u, agent call count:%d, "
 			"running with timedif=%lld ms and report\n",
 			monitor->pid, monitor->pname, monitor->tid,
@@ -229,11 +229,14 @@ static void show_timeout_cmd_info(struct cmd_monitor *monitor)
 		monitor->lasttime = nowtime;
 		monitor->timer_index = monitor->timer_index >= (int32_t)sizeof(g_timer_step) ?
 			(int32_t)sizeof(g_timer_step) : (monitor->timer_index + 1);
-		tlogd("[cmd_monitor_tick] pid=%d,pname=%s,tid=%d, "
+		tlogw("[cmd_monitor_tick] pid=%d,pname=%s,tid=%d, "
 			"lastcmdid=%u,agent call count:%d,timedif=%lld ms\n",
 			monitor->pid, monitor->pname, monitor->tid,
-			monitor->lastcmdid, monitor->agent_call_count,
-			timedif);
+			monitor->lastcmdid, monitor->agent_call_count, timedif);
+		if (*has_print == false) {
+			show_agent_event_status();
+			*has_print = true;
+		}
 	}
 }
 
@@ -241,6 +244,8 @@ static void cmd_monitor_tick(void)
 {
 	struct cmd_monitor *monitor = NULL;
 	struct cmd_monitor *tmp = NULL;
+	/* we use has_print here to avoid printing cmd info and agent status repeatly */
+	bool has_print = false;
 
 	mutex_lock(&g_cmd_monitor_lock);
 	list_for_each_entry_safe(monitor, tmp, &g_cmd_monitor_list, list) {
@@ -256,7 +261,7 @@ static void cmd_monitor_tick(void)
 			kfree(monitor);
 			continue;
 		}
-		show_timeout_cmd_info(monitor);
+		show_timeout_cmd_info(monitor, &has_print);
 	}
 
 	/* if have cmd in monitor list, we need tick */

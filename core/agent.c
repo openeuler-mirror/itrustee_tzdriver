@@ -386,6 +386,24 @@ struct smc_event_data *find_event_control(unsigned int agent_id, unsigned int ns
 	return tmp_data;
 }
 
+void show_agent_event_status(void)
+{
+	struct smc_event_data *event_data = NULL;
+	unsigned long flags;
+
+	spin_lock_irqsave(&g_agent_control.lock, flags);
+	list_for_each_entry(event_data, &g_agent_control.agent_list, head) {
+		tlogw("[show_agent_event_cnt] agent_id=0x%x, nsid=%x, agent_status=%u, last_workca=%d-%d, "
+			"send_wake_up=%u, wait_event=%u, wake_up_succ=%u, send_response=%u, response_succ=%u \n",
+			event_data->agent_id, event_data->nsid, event_data->work_info.agent_status,
+			event_data->work_info.last_pid, event_data->work_info.last_tid,
+			event_data->work_info.agent_send_wake_up_cnt, event_data->work_info.agent_wait_event_cnt,
+			event_data->work_info.agent_wake_up_succ_cnt, event_data->work_info.agent_send_response_cnt,
+			event_data->work_info.agent_response_succ_cnt);
+	}
+	spin_unlock_irqrestore(&g_agent_control.lock, flags);
+}
+
 static void unmap_agent_buffer(struct smc_event_data *event_data)
 {
 	if (!event_data) {
@@ -489,7 +507,9 @@ static int wait_agent_response(struct smc_event_data *event_data)
 				(long)(RESLEEP_TIMEOUT * HZ));
 			if (rc)
 				continue;
-			tloge("agent wait event is timeout\n");
+			tloge("agent wait event is timeout, 0x%x, %u-%u\n",
+				event_data->agent_id, event_data->nsid, event_data->vmid);
+			show_agent_event_status();
 			/* if no kill signal, just resleep before agent wake */
 			if (!sigkill_pending(current)) {
 				answered = false;
@@ -525,6 +545,9 @@ int agent_process_work(const struct tc_ns_smc_cmd *smc_cmd,
 		put_agent_event(event_data);
 		return -EFAULT;
 	}
+	event_data->work_info.last_pid = current->tgid;
+	event_data->work_info.last_tid = current->pid;
+	event_data->work_info.agent_status = AGENT_RECV_TEE_CMD;
 
 	if (smc_cmd->cmd_type == CMD_TYPE_RELEASE_AGENT &&
 		atomic_read(&event_data->agent_ready) == AGENT_PENDING) {
@@ -542,10 +565,14 @@ int agent_process_work(const struct tc_ns_smc_cmd *smc_cmd,
 	wake_up(&event_data->wait_event_wq);
 	tlogd("agent 0x%x nsid 0x%x vmid 0x%x request, goto sleep, pe->run=%d\n",
 	      agent_id, nsid, vmid, atomic_read(&event_data->ca_run));
+	event_data->work_info.agent_send_wake_up_cnt++;
+	event_data->work_info.agent_status = AGENT_WAKEUP_REE_THREAD;
 
 	ret = wait_agent_response(event_data);
 	atomic_set(&event_data->ca_run, 0);
 	put_agent_event(event_data);
+	event_data->work_info.agent_response_succ_cnt++;
+	event_data->work_info.agent_status = AGENT_REE_THREAD_WORK_DONE;
 
 reset_context:
 	/*
@@ -553,6 +580,7 @@ reset_context:
 	 * add agent call count, cause it's a new smc cmd.
 	 */
 	cmd_monitor_reset_context();
+	event_data->work_info.agent_status = AGENT_RET_TO_TEE;
 	return ret;
 }
 
@@ -592,8 +620,11 @@ int tc_ns_wait_event(unsigned int agent_id, unsigned int nsid, unsigned int vmid
 		return ret;
 	}
 
+	event_data->work_info.agent_wait_event_cnt++;
+
 	ret = wait_event_interruptible(event_data->wait_event_wq,
 		event_data->ret_flag);
+	event_data->work_info.agent_wake_up_succ_cnt++;
 	put_agent_event(event_data);
 
 	if (is_tee_rebooting())
@@ -695,6 +726,7 @@ static void process_send_event_response(struct smc_event_data *event_data, bool 
 	/* make sure reset working_ca before wakeup CA */
 	asm volatile("dmb sy");
 	wake_up(&event_data->ca_pending_wq);
+	event_data->work_info.agent_send_response_cnt++;
 }
 
 int tc_ns_send_event_response(unsigned int agent_id, unsigned int nsid, unsigned int vmid)
@@ -750,6 +782,11 @@ static void init_restart_agent_node(struct tc_ns_dev_file *dev_file,
 	init_waitqueue_head(&(event_data->send_response_wq));
 	init_waitqueue_head(&(event_data->ca_pending_wq));
 	atomic_set(&(event_data->ca_run), 0);
+	event_data->work_info.agent_send_wake_up_cnt = 0;
+	event_data->work_info.agent_wait_event_cnt = 0;
+	event_data->work_info.agent_wake_up_succ_cnt = 0;
+	event_data->work_info.agent_send_response_cnt = 0;
+	event_data->work_info.agent_response_succ_cnt = 0;
 }
 
 static int create_new_agent_node(struct tc_ns_dev_file *dev_file,
@@ -776,6 +813,11 @@ static int create_new_agent_node(struct tc_ns_dev_file *dev_file,
 	(*event_data)->agent_buff_kernel = *agent_buff;
 	(*event_data)->agent_buff_size = agent_buff_size;
 	(*event_data)->owner = dev_file;
+	(*event_data)->work_info.agent_send_wake_up_cnt = 0;
+	(*event_data)->work_info.agent_wait_event_cnt = 0;
+	(*event_data)->work_info.agent_wake_up_succ_cnt = 0;
+	(*event_data)->work_info.agent_send_response_cnt = 0;
+	(*event_data)->work_info.agent_response_succ_cnt = 0;
 	init_waitqueue_head(&(*event_data)->wait_event_wq);
 	init_waitqueue_head(&(*event_data)->send_response_wq);
 	INIT_LIST_HEAD(&(*event_data)->head);
