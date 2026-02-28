@@ -49,6 +49,13 @@ struct time_spec {
 #endif
 };
 
+enum {
+	AGENT_RECV_TEE_CMD = 1,
+	AGENT_WAKEUP_REE_THREAD = 2,
+	AGENT_REE_THREAD_WORK_DONE = 3,
+	AGENT_RET_TO_TEE = 4,
+};
+
 struct cmd_monitor {
 	struct list_head list;
 	struct time_spec sendtime;

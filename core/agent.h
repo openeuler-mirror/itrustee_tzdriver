@@ -49,6 +49,17 @@ enum agent_status {
 	AGENT_READY_TO_UNREG = 4,
 };
 
+struct agent_work_info {
+	uint32_t agent_send_wake_up_cnt;
+	uint32_t agent_wait_event_cnt;
+	uint32_t agent_wake_up_succ_cnt;
+	uint32_t agent_send_response_cnt;
+	uint32_t agent_response_succ_cnt;
+	uint32_t agent_status;
+	pid_t last_pid;
+	pid_t last_tid;
+};
+
 /* for secure agent */
 struct smc_event_data {
 	unsigned int agent_id;
@@ -68,6 +79,7 @@ struct smc_event_data {
 	wait_queue_head_t ca_pending_wq;
 	/* indicate whether agent is allowed to return to TEE */
 	atomic_t ca_run;
+	struct agent_work_info work_info;
 };
 
 struct tee_agent_kernel_ops {
@@ -138,5 +150,5 @@ void tee_agent_clear_dev_owner(const struct tc_ns_dev_file *dev_file);
 char *get_proc_dpath(char *path, int path_len);
 int check_ext_agent_access(uint32_t agent_id);
 void free_agent_list(void);
-
+void show_agent_event_status(void);
 #endif
