@@ -30,7 +30,7 @@ itrustee_tzdriver
 
 6）make 编译出tzdriver.ko文件。
    鲲鹏920新型号使用命令：`make CPU_GROUP_BINDING=y`
-
+   使用容器内非root用户提供tee能力命令：`make CONFIG_CONTAINER_TEE_CAPABLE=true`
 #### 使用说明
 
 1）确保ARM 服务器已经运行iTrustee OS。

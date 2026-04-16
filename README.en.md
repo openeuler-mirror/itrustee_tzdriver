@@ -23,7 +23,8 @@ tzdriver
 4) make
    For 920 new models use this command instead：`make CPU_GROUP_BINDING=y`
 then you will see tzdriver.ko under the folder "tzdriver"
-
+   If you want to use tee as a non-root user inside a container, 
+use this command instead：`make CONFIG_CONTAINER_TEE_CAPABLE=true`
 4.Run
 1) make sure that TEEOS is running
 2) # insmod tzdriver.ko
