@@ -899,7 +899,9 @@ static int __init register_device(const char *log_name,
 	}
 	log->misc_device.fops = &g_logger_fops;
 	log->misc_device.parent = NULL;
-
+#ifdef CONFIG_CONTAINER_TEE_CAPABLE
+	log->misc_device.mode = 0666;
+#endif
 	INIT_LIST_HEAD(&log->readers);
 	mutex_init(&log->mutex_info);
 	mutex_init(&log->mutex_log_chnl);

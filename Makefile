@@ -13,6 +13,10 @@ tzdriver-objs += core/teek_client_api.o
 tzdriver-objs += core/tee_info.o
 tzdriver-objs += tzdriver_internal/tee_reboot/reboot.o
 
+ifeq ($(CONFIG_CONTAINER_TEE_CAPABLE), true)
+EXTRA_CFLAGS += -DCONFIG_CONTAINER_TEE_CAPABLE
+endif
+
 ifeq ($(CONFIG_TEE_TELEPORT_SUPPORT), y)
 tzdriver-objs += core/tee_portal.o
 EXTRA_CFLAGS += -DCONFIG_TEE_TELEPORT_SUPPORT -DCONFIG_TEE_TELEPORT_AUTH
