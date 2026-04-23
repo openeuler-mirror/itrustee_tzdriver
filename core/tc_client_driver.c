@@ -137,22 +137,15 @@ struct tc_ns_dev_list *get_dev_list(void)
 	return &g_tc_ns_dev_list;
 }
 
-static int tc_ns_operate_vm_nsid_vmid(const struct tc_ns_dev_file *dev_file, const void *argp, unsigned int cmd)
+#ifdef CONFIG_CONFIDENTIAL_CONTAINER
+/* both register and unregister is handled by this function, distinguish operation via cmd */
+static int handle_groupid_cmd(uint32_t vmid, uint32_t nsid, uint32_t cmd)
 {
 	struct tc_ns_smc_cmd smc_cmd = {{0}, 0};
-	struct_group group = { 0 };
-	if (copy_from_user(&group, argp, sizeof(struct_group))) {
-		tloge("file buf get failed \n");
-		return -EFAULT;
-	}
-	if (get_ree_load_mode() != REE_VIRTUAL || group.vmid == 0 || group.vmid == REE_VIRTUAL_HOST_VMID) {
-		tloge("ree load mode is not virtual, not allow to register vm nsid=%u, vmid=%u\n", group.vmid, group.nsid);
-		return -EINVAL;
-	}
 	smc_cmd.cmd_type = CMD_TYPE_GLOBAL;
-	smc_cmd.vmid = group.vmid;
-	smc_cmd.nsid = group.nsid;
-    smc_cmd.cmd_id = GLOBAL_CMD_ID_REGISTER_HOST_NSID_VMID;
+	smc_cmd.vmid = vmid;
+	smc_cmd.nsid = nsid;
+	smc_cmd.cmd_id = GLOBAL_CMD_ID_REGISTER_HOST_NSID_VMID;
 	if (cmd == TC_NS_CLIENT_IOCTL_UNREGISTER_VM_NSID_VMID) {
 		smc_cmd.cmd_id = GLOBAL_CMD_ID_UNREGISTER_HOST_NSID_VMID;
 		smc_cmd.nsid = 0;
@@ -163,9 +156,56 @@ static int tc_ns_operate_vm_nsid_vmid(const struct tc_ns_dev_file *dev_file, con
 		ret = -EPERM;
 		tloge("smc call return error ret 0x%x\n", smc_cmd.ret_val);
 	}
-	tlogi("smc call return nsid=%u, vmid=%u, ret 0x%x\n", group.nsid, group.vmid, smc_cmd.ret_val);
+	tlogi("smc call return nsid=%u, vmid=%u, ret 0x%x\n", nsid, vmid, smc_cmd.ret_val);
 	return ret;
 }
+
+static int tc_ns_operate_vm_nsid_vmid(const struct tc_ns_dev_file *dev_file, const void *argp, unsigned int cmd)
+{
+	struct_group group = { 0 };
+	if (copy_from_user(&group, argp, sizeof(struct_group))) {
+		tloge("file buf get failed \n");
+		return -EFAULT;
+	}
+	if (get_ree_load_mode() != REE_VIRTUAL || group.vmid == 0 || group.vmid == REE_VIRTUAL_HOST_VMID) {
+		tloge("ree load mode is not virtual, not allow to register vm nsid=%u, vmid=%u\n", group.vmid, group.nsid);
+		return -EINVAL;
+	}
+	int ret = handle_groupid_cmd(group.vmid, group.nsid, cmd);
+	if (ret == 0) {
+		if (cmd == TC_NS_CLIENT_IOCTL_REGISTER_VM_NSID_VMID) {
+			struct_groupid *groupid = (struct_groupid *)kmalloc(sizeof(struct_groupid), GFP_KERNEL);
+			if (IS_ERR_OR_NULL(groupid)) {
+				tloge("alloc for groupid fail vmid: %u nsid: %u\n", group.vmid, group.nsid);
+				return ret; /* here return 0, just print error information */
+			}
+			groupid->vmid = group.vmid;
+			groupid->nsid = group.nsid;
+			mutex_lock(&dev_file->groupid_lock);
+			list_add_tail(&groupid->head, &dev_file->groupid_list);
+			mutex_unlock(&dev_file->groupid_lock);
+			tlogi("add vmid %u nsid %u into list succ\n", group.vmid, group.nsid);
+		} else if (cmd == TC_NS_CLIENT_IOCTL_UNREGISTER_VM_NSID_VMID) {
+			struct_groupid *groupid = NULL, *groupid_temp = NULL;
+			bool found = false;
+			mutex_lock(&dev_file->groupid_lock);
+			list_for_each_entry_safe(groupid, groupid_temp, &dev_file->groupid_list, head) {
+				if (groupid->vmid == group.vmid) {
+					list_del(&groupid->head);
+					kfree(groupid);
+					found = true;
+				}
+			}
+			if (!found)
+				tloge("unregister vmid %u nsid %u not found\n", group.vmid, group.nsid);
+			else
+				tlogi("remove vmid %u nsid %u from list succ\n", group.vmid, group.nsid);
+			mutex_unlock(&dev_file->groupid_lock);
+		}
+	}
+	return ret;
+}
+#endif
 
 int tc_ns_register_host_nsid_vmid(void)
 {
@@ -443,6 +483,7 @@ int tc_ns_client_open(struct tc_ns_dev_file **dev_file, uint8_t kernel_api)
 	g_device_file_cnt++;
 	mutex_unlock(&g_device_file_cnt_lock);
 	INIT_LIST_HEAD(&dev->shared_mem_list);
+	INIT_LIST_HEAD(&dev->groupid_list);
 	dev->login_setup = 0;
 #ifdef CONFIG_AUTH_HASH
 	dev->cainfo_hash_setup = 0;
@@ -452,6 +493,7 @@ int tc_ns_client_open(struct tc_ns_dev_file **dev_file, uint8_t kernel_api)
 	mutex_init(&dev->service_lock);
 	mutex_init(&dev->shared_mem_lock);
 	mutex_init(&dev->login_setup_lock);
+	mutex_init(&dev->groupid_lock);
 #ifdef CONFIG_AUTH_HASH
 	mutex_init(&dev->cainfo_hash_setup_lock);
 #endif
@@ -474,10 +516,32 @@ static void del_dev_node(struct tc_ns_dev_file *dev)
 	mutex_unlock(&g_tc_ns_dev_list.dev_lock);
 }
 
+#ifdef CONFIG_CONFIDENTIAL_CONTAINER
+static void free_groupid_list(struct tc_ns_dev_file *dev)
+{
+	int ret;
+	struct_groupid *groupid = NULL, *groupid_temp = NULL;
+
+	mutex_lock(&dev->groupid_lock);
+	list_for_each_entry_safe(groupid, groupid_temp, &dev->groupid_list, head) {
+		ret = handle_groupid_cmd(groupid->vmid, groupid->nsid, TC_NS_CLIENT_IOCTL_UNREGISTER_VM_NSID_VMID);
+		if (ret != 0)
+			tloge("unregister groupid vmid: %u nsid: %u fail\n", groupid->vmid, groupid->nsid);
+		list_del(&groupid->head);
+		tlogi("unregister groupid vmid: %u nsid: %u succ\n", groupid->vmid, groupid->nsid);
+		kfree(groupid);
+	}
+	mutex_unlock(&dev->groupid_lock);
+}
+#endif
+
 void free_dev(struct tc_ns_dev_file *dev)
 {
 	del_dev_node(dev);
 	tee_agent_clear_dev_owner(dev);
+#ifdef CONFIG_CONFIDENTIAL_CONTAINER
+	free_groupid_list(dev);
+#endif
 	if (memset_s(dev, sizeof(*dev), 0, sizeof(*dev)) != 0)
 		tloge("Caution, memset dev fail!\n");
 	kfree(dev);

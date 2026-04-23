@@ -136,7 +136,15 @@ struct tc_ns_dev_file {
 #ifdef CONFIG_TEE_TELEPORT_SUPPORT
 	bool portal_enabled;
 #endif
+	struct mutex groupid_lock;
+	struct list_head groupid_list;
 };
+
+typedef struct {
+	struct list_head head;
+	unsigned int nsid;
+	unsigned int vmid;
+} struct_groupid;
 
 union tc_ns_parameter {
 	struct {
