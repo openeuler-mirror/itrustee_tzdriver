@@ -360,7 +360,7 @@ void send_crashed_event_response_single(const struct tc_ns_dev_file *dev_file)
 	}
 	spin_unlock_irqrestore(&g_agent_control.lock, flags);
 
-	if (nsid != PROC_PID_INIT_INO && need_unreg)
+	if ((nsid != PROC_PID_INIT_INO || is_valid_vmid(vmid)) && need_unreg)
 		(void)tc_ns_unregister_agent(agent_id, nsid, vmid);
 
 	send_event_response(agent_id, nsid, vmid);
@@ -1158,7 +1158,7 @@ void send_crashed_event_response_all(const struct tc_ns_dev_file *dev_file)
 	for (i = 0; i < AGENT_MAX; i++) {
 		if (agent_id[i] == 0)
 			continue;
-		if (nsids[i] != PROC_PID_INIT_INO && need_unregs[i])
+		if ((nsids[i] != PROC_PID_INIT_INO || is_valid_vmid(vmids[i])) && need_unregs[i])
 			(void)tc_ns_unregister_agent(agent_id[i], nsids[i], vmids[i]);
 		send_event_response(agent_id[i], nsids[i], vmids[i]);
 	}
