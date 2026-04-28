@@ -126,7 +126,7 @@ struct cmd_reuse_info {
 	enum cmd_reuse cmd_usage;
 };
 
-#if (CONFIG_CPU_AFF_NR != 0) || (defined CONFIG_CPU_GROUP_BINDING)
+#if (CONFIG_CPU_AFF_NR != 0) || (defined CONFIG_CPU_BINDING)
 static struct cpumask g_cpu_mask;
 static int g_mask_flag = 0;
 #endif
@@ -650,33 +650,22 @@ bool sigkill_pending(struct task_struct *tsk)
 	return flag;
 }
 
-#if (CONFIG_CPU_AFF_NR != 0) || (defined CONFIG_CPU_GROUP_BINDING)
+#if (CONFIG_CPU_AFF_NR != 0) || (defined CONFIG_CPU_BINDING)
 static int set_cpumask_aff(struct cpumask *mask)
 {
 	unsigned int i;
-# ifdef CONFIG_CPU_GROUP_BINDING
-	unsigned int j, threads_per_core, nr_dies, phy_core_per_die;
-	unsigned int nr_die_binded, nr_core_binded;
-# endif
 
-# ifdef CONFIG_CPU_GROUP_BINDING
+#ifdef CONFIG_CPU_BINDING
+#define MAX_SUPPORT_CPU_NUMS 256
 	/**
-	 * iTrustee-Server supports only 4 dies, 32 phy cores per die and 2 threads per phy core.
-	 * Identify by num of CPU cores and cpu topology; bind to those specific cores when detected redundance.
+	 * Bind to each online CPU if online CPU count < 256, otherwise skip binding.
 	 */
-	threads_per_core = cpumask_weight(topology_sibling_cpumask(smp_processor_id()));
-	nr_dies = num_possible_nodes();
-	phy_core_per_die = nr_cpu_ids / nr_dies / threads_per_core;
-	if (phy_core_per_die > CONFIG_NUM_TEE_PHY_CORE_PER_DIE || nr_dies > CONFIG_NUM_TEE_DIE) {
-		nr_die_binded = nr_dies < CONFIG_NUM_TEE_DIE ? nr_dies : CONFIG_NUM_TEE_DIE;
-		nr_core_binded = phy_core_per_die < CONFIG_NUM_TEE_PHY_CORE_PER_DIE ? phy_core_per_die :
-			CONFIG_NUM_TEE_PHY_CORE_PER_DIE;
-		cpumask_clear(mask);
-		for (j = 0; j < nr_die_binded; j++)
-			for (i = 0; i < nr_core_binded * threads_per_core; i++)
-				cpumask_set_cpu(i + j * phy_core_per_die * threads_per_core, mask);
-		return 1;
+	cpumask_clear(mask);
+	for_each_online_cpu(i) {
+		if (i < MAX_SUPPORT_CPU_NUMS)
+			cpumask_set_cpu(i, mask);
 	}
+	return 1;
 # endif
 
 # if (CONFIG_CPU_AFF_NR != 0)
@@ -690,7 +679,7 @@ static int set_cpumask_aff(struct cpumask *mask)
 }
 #endif
 
-#if (CONFIG_CPU_AFF_NR != 0) || (defined CONFIG_CPU_GROUP_BINDING)
+#if (CONFIG_CPU_AFF_NR != 0) || (defined CONFIG_CPU_BINDING)
 static void set_cpu_strategy(struct cpumask *old_mask)
 {
 	unsigned int i;
@@ -707,7 +696,7 @@ static void set_cpu_strategy(struct cpumask *old_mask)
 }
 #endif
 
-#if (CONFIG_CPU_AFF_NR != 0) || (defined CONFIG_CPU_GROUP_BINDING)
+#if (CONFIG_CPU_AFF_NR != 0) || (defined CONFIG_CPU_BINDING)
 static void restore_cpu(struct cpumask *old_mask)
 {
 	/* current equal old means no set cpu affinity, no need to restore */
@@ -767,7 +756,7 @@ static void send_smc_cmd(struct smc_in_params *in_param,
 static void send_smc_cmd_with_retry(struct smc_in_params *in_param,
 	struct smc_out_params *out_param)
 {
-#if (CONFIG_CPU_AFF_NR != 0) || (defined CONFIG_CPU_GROUP_BINDING)
+#if (CONFIG_CPU_AFF_NR != 0) || (defined CONFIG_CPU_BINDING)
 	struct cpumask old_mask;
 	set_cpu_strategy(&old_mask);
 #endif
@@ -783,7 +772,7 @@ retry:
 		in_param->x1 = SMC_OPS_SCHEDTO;
 		goto retry;
 	}
-#if (CONFIG_CPU_AFF_NR != 0) || (defined CONFIG_CPU_GROUP_BINDING)
+#if (CONFIG_CPU_AFF_NR != 0) || (defined CONFIG_CPU_BINDING)
 	restore_cpu(&old_mask);
 #endif
 }
@@ -836,11 +825,11 @@ static noinline int smp_smc_send(struct smc_send_param param,
 {
 	struct smc_in_params in_param = { param.cmd, param.ops, param.ca, 0, 0 };
 	struct smc_out_params out_param = {0};
-#if (CONFIG_CPU_AFF_NR != 0) || (defined CONFIG_CPU_GROUP_BINDING)
+#if (CONFIG_CPU_AFF_NR != 0) || (defined CONFIG_CPU_BINDING)
 	struct cpumask old_mask;
 #endif
 
-#if (CONFIG_CPU_AFF_NR != 0) || (defined CONFIG_CPU_GROUP_BINDING)
+#if (CONFIG_CPU_AFF_NR != 0) || (defined CONFIG_CPU_BINDING)
 	set_cpu_strategy(&old_mask);
 #endif
 retry:
@@ -875,7 +864,7 @@ retry:
 			goto retry;
 		}
 	}
-#if (CONFIG_CPU_AFF_NR != 0) || (defined CONFIG_CPU_GROUP_BINDING)
+#if (CONFIG_CPU_AFF_NR != 0) || (defined CONFIG_CPU_BINDING)
 	restore_cpu(&old_mask);
 #endif
 	return (int)out_param.ret;
@@ -887,14 +876,14 @@ static unsigned long raw_smc_send(uint32_t cmd, uint32_t param1,
 	struct smc_in_params in_param = {cmd, param1, param2};
 	struct smc_out_params out_param = {0};
 
-#if (CONFIG_CPU_AFF_NR != 0) || (defined CONFIG_CPU_GROUP_BINDING)
+#if (CONFIG_CPU_AFF_NR != 0) || (defined CONFIG_CPU_BINDING)
 	struct cpumask old_mask;
 	set_cpu_strategy(&old_mask);
 #endif
 
 	send_smc_cmd(&in_param, &out_param, wait);
 
-#if (CONFIG_CPU_AFF_NR != 0) || (defined CONFIG_CPU_GROUP_BINDING)
+#if (CONFIG_CPU_AFF_NR != 0) || (defined CONFIG_CPU_BINDING)
 	restore_cpu(&old_mask);
 #endif
 	return out_param.ret;
