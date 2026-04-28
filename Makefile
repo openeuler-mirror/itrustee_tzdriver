@@ -3,6 +3,7 @@ obj-m := tzdriver.o
 CONFIG_FFA_SUPPORT := 0
 CONFIG_TEE_TELEPORT_SUPPORT := y
 CONFIG_CONFIDENTIAL_CONTAINER ?= y
+CONFIG_TA_GET_CA_CMDLINE := n
 
 tzdriver-objs := core/smc_smp.o core/tc_client_driver.o core/session_manager.o core/mailbox_mempool.o core/teek_app_load.o
 tzdriver-objs += core/agent.o core/gp_ops.o core/mem.o core/cmdmonitor.o core/tzdebug.o core/tz_spi_notify.o core/tz_pm.o core/tee_compat_check.o
@@ -15,6 +16,10 @@ tzdriver-objs += tzdriver_internal/tee_reboot/reboot.o
 
 ifeq ($(CONFIG_CONTAINER_TEE_CAPABLE), true)
 EXTRA_CFLAGS += -DCONFIG_CONTAINER_TEE_CAPABLE
+endif
+
+ifeq ($(CONFIG_TA_GET_CA_CMDLINE), y)
+EXTRA_CFLAGS += -DCONFIG_TA_GET_CA_CMDLINE -DCA_CMDLINE_SIZE=4096 -DMAX_BUF_LEN=8192
 endif
 
 ifeq ($(CONFIG_TEE_TELEPORT_SUPPORT), y)

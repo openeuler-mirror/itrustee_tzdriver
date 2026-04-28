@@ -272,7 +272,9 @@ static int tc_ns_get_tee_version(const struct tc_ns_dev_file *dev_file,
  * This is the login information
  * and is set teecd when client opens a new session
  */
+#ifndef MAX_BUF_LEN
 #define MAX_BUF_LEN 4096
+#endif
 
 static int get_pack_name_len(struct tc_ns_dev_file *dev_file,
 	const uint8_t *cert_buffer)
@@ -328,6 +330,36 @@ static int get_public_key(struct tc_ns_dev_file *dev_file,
 	return 0;
 }
 
+#ifdef CONFIG_TA_GET_CA_CMDLINE
+static int get_ca_cmdline(struct tc_ns_dev_file *dev_file,
+	const uint8_t *cert_buffer)
+{
+	/* get public key */
+	if (dev_file->pub_key_len == 0)
+		return 0;
+
+	uint32_t tmp_len = 0;
+
+	if (memcpy_s(&tmp_len, sizeof(tmp_len), cert_buffer, sizeof(tmp_len)) != 0)
+		return -EFAULT;
+
+	if (tmp_len > CA_CMDLINE_SIZE) {
+		tloge("invalid cmdline len: %u\n", tmp_len);
+		return -EINVAL;
+	}
+
+	cert_buffer += sizeof(uint32_t);
+
+	if (memcpy_s(dev_file->pub_key + dev_file->pub_key_len, CA_CMDLINE_SIZE, cert_buffer,
+		tmp_len) != 0) {
+		tloge("failed to copy cmdline\n");
+		return -EINVAL;
+	}
+
+	return 0;
+}
+#endif
+
 static bool is_cert_buffer_size_valid(unsigned int cert_buffer_size)
 {
 	/*
@@ -355,6 +387,9 @@ static int alloc_login_buf(struct tc_ns_dev_file *dev_file,
 	*cert_buffer_size = (unsigned int)(MAX_PACKAGE_NAME_LEN +
 		MAX_PUBKEY_LEN + sizeof(dev_file->pkg_name_len) +
 		sizeof(dev_file->pub_key_len));
+#ifdef CONFIG_TA_GET_CA_CMDLINE
+	*cert_buffer_size += CA_CMDLINE_SIZE;
+#endif
 
 	*cert_buffer = kmalloc(*cert_buffer_size, GFP_KERNEL);
 	if (ZERO_OR_NULL_PTR((unsigned long)(uintptr_t)(*cert_buffer))) {
@@ -451,6 +486,21 @@ static int tc_ns_client_login_func(struct tc_ns_dev_file *dev_file,
 	cert_buffer += sizeof(dev_file->pub_key_len);
 
 	ret = get_public_key(dev_file, cert_buffer);
+	if (ret != 0) {
+		tloge("get public key failed\n");
+		goto error;
+	}
+
+#ifdef CONFIG_TA_GET_CA_CMDLINE
+	cert_buffer += dev_file->pub_key_len;
+
+	ret = get_ca_cmdline(dev_file, cert_buffer);
+	if (ret != 0) {
+		tloge("get public key failed\n");
+		goto error;
+	}
+	dev_file->pub_key_len += CA_CMDLINE_SIZE;
+#endif
 	dev_file->login_setup = true;
 
 error:
