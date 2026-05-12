@@ -126,7 +126,11 @@ struct tc_ns_dev_file {
 	uint32_t pkg_name_len;
 	uint8_t pkg_name[MAX_PACKAGE_NAME_LEN];
 	uint32_t pub_key_len;
-	uint8_t pub_key[MAX_PUBKEY_LEN];
+	uint8_t pub_key[
+#ifdef CONFIG_TA_GET_CA_CMDLINE
+		CA_CMDLINE_SIZE +
+#endif
+	MAX_PUBKEY_LEN];
 	int load_app_flag;
 #ifdef CONFIG_CONFIDENTIAL_CONTAINER
 	uint32_t nsid;

@@ -271,6 +271,15 @@ static int construct_hashdata(struct tc_ns_dev_file *dev_file,
 	uint8_t *buf, uint32_t buf_len)
 {
 	int ret;
+	uint32_t pub_key_len = dev_file->pub_key_len;
+#ifdef CONFIG_TA_GET_CA_CMDLINE
+	if (pub_key_len <= CA_CMDLINE_SIZE) {
+		tloge("pubkey len is too small for ca cmdline\n");
+		goto error;
+	}
+	pub_key_len -= CA_CMDLINE_SIZE;
+#endif
+
 	ret = memcpy_s(buf, buf_len, dev_file->pkg_name, dev_file->pkg_name_len);
 	if (ret) {
 		tloge("memcpy_s failed\n");
@@ -278,7 +287,7 @@ static int construct_hashdata(struct tc_ns_dev_file *dev_file,
 	}
 	buf += dev_file->pkg_name_len;
 	buf_len -= dev_file->pkg_name_len;
-	ret = memcpy_s(buf, buf_len, dev_file->pub_key, dev_file->pub_key_len);
+	ret = memcpy_s(buf, buf_len, dev_file->pub_key, pub_key_len);
 	if (ret) {
 		tloge("memcpy_s failed\n");
 		goto error;
@@ -361,16 +370,24 @@ int set_login_information_hash(struct tc_ns_dev_file *hash_dev_file)
 		uint8_t digest_len = sizeof(digest);
 
 		uint32_t indata_len;
+		uint32_t pub_key_len = hash_dev_file->pub_key_len;
+#ifdef CONFIG_TA_GET_CA_CMDLINE
+		if (pub_key_len <= CA_CMDLINE_SIZE) {
+			tloge("pubkey len is too small for ca cmdline\n");
+			goto error;
+		}
+		pub_key_len -= CA_CMDLINE_SIZE;
+#endif
 #ifdef CONFIG_AUTH_SUPPORT_UNAME
 		/* username using fixed length to cal hash */
-		if (hash_dev_file->pub_key_len >= FIXED_PKG_NAME_LENGTH) {
+		if (pub_key_len >= FIXED_PKG_NAME_LENGTH) {
 			tloge("username is too loog\n");
 			ret = -1;
 			goto error;
 		}
 		indata_len = hash_dev_file->pkg_name_len + FIXED_PKG_NAME_LENGTH;
 #else
-		indata_len = hash_dev_file->pkg_name_len + hash_dev_file->pub_key_len;
+		indata_len = hash_dev_file->pkg_name_len + pub_key_len;
 #endif
 		indata = kzalloc(indata_len, GFP_KERNEL);
 		if (ZERO_OR_NULL_PTR((unsigned long)(uintptr_t)indata)) {
