@@ -35,15 +35,10 @@ EXTRA_CFLAGS += -DTEE_AGENTD_PATH_UID_AUTH_CTX=\"/usr/bin/agentd:0\"
 tzdriver-objs += core/tc_cvm_driver.o
 endif
 
-RESULT := $(shell cat /proc/kallsyms | grep vsnprintf_s)
-
-STATUS := $(findstring vsnprintf_s, $(RESULT))
-
-ifneq ($(STATUS), vsnprintf_s)
+EXTRA_CFLAGS += -DSECUREC_EXPORT_KERNEL_SYMBOL=0
 tzdriver-objs += libboundscheck/src/memcpy_s.o libboundscheck/src/memset_s.o libboundscheck/src/strcpy_s.o libboundscheck/src/strncpy_s.o \
 libboundscheck/src/memmove_s.o libboundscheck/src/strcat_s.o libboundscheck/src/strncat_s.o libboundscheck/src/strtok_s.o \
 libboundscheck/src/securecutil.o libboundscheck/src/secureprintoutput_a.o libboundscheck/src/snprintf_s.o libboundscheck/src/vsnprintf_s.o
-endif
 
 # you should config right path according to your run-time environment
 KPATH := /usr/src/kernels
