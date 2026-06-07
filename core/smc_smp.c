@@ -1583,6 +1583,26 @@ static void clean_smc_resrc(struct cmd_reuse_info info,
 	release_pending_entry(pe);
 }
 
+static DEFINE_MUTEX(g_abort_cmd_lock);
+static bool g_abort_cmd_enabled = true;
+
+void set_abort_cmd_enabled(bool enabled)
+{
+		mutex_lock(&g_abort_cmd_lock);
+		g_abort_cmd_enabled = enabled;
+		mutex_unlock(&g_abort_cmd_lock);
+		tlogi("abort_cmd %s\n", enabled ? "enabled" : "disabled");
+}
+
+static bool get_abort_cmd_enabled(void)
+{
+		bool enabled;
+		mutex_lock(&g_abort_cmd_lock);
+		enabled = g_abort_cmd_enabled;
+		mutex_unlock(&g_abort_cmd_lock);
+		return enabled;
+}
+
 static int set_abort_cmd(int index)
 {
 	acquire_smc_buf_lock(&g_cmd_data->smc_lock);
@@ -1610,6 +1630,10 @@ static int set_abort_cmd(int index)
 static enum smc_ops_exit process_abort_cmd(int index, const struct pending_entry *pe)
 {
 	(void)pe;
+	if (!get_abort_cmd_enabled()) {
+		tlogi("abort_cmd is disabled, skipping\n");
+		return SMC_OPS_SCHEDTO;
+	}
 	if (set_abort_cmd(index) == 0)
 		return SMC_OPS_ABORT_TASK;
 

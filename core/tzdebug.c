@@ -236,10 +236,24 @@ static void tzmemdump(const char *param)
 	mailbox_free(mem);
 }
 
+static void enable_abort_cmd(const char *param)
+{
+		(void)param;
+		set_abort_cmd_enabled(true);
+}
+
+static void disable_abort_cmd(const char *param)
+{
+		(void)param;
+		set_abort_cmd_enabled(false);
+}
+
 static struct opt_ops g_opt_arr[] = {
 	{"dump", tzdump},
 	{"memdump", tzmemdump},
 	{"dump_service", dump_services_status},
+	{"enable_abort_cmd", enable_abort_cmd},
+	{"disable_abort_cmd", disable_abort_cmd},
 };
 
 static ssize_t tz_dbg_opt_read(struct file *filp, char __user *ubuf,
