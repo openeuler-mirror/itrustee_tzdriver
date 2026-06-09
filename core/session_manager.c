@@ -59,7 +59,7 @@
 #include "tee_compat_check.h"
 
 static DEFINE_MUTEX(g_load_app_lock);
-#define MAX_REF_COUNT (255)
+#define MAX_REF_COUNT (512)
 
 /* record all service node and need mutex to avoid race */
 struct list_head g_service_list;

@@ -106,7 +106,7 @@ struct tc_ns_service {
 struct tc_ns_dev_file {
 	unsigned int dev_file_id;
 	struct mutex service_lock; /* for service_ref[], services[] */
-	uint8_t service_ref[SERVICES_MAX_COUNT]; /* a judge if set services[i]=NULL */
+	uint16_t service_ref[SERVICES_MAX_COUNT]; /* a judge if set services[i]=NULL */
 	struct tc_ns_service *services[SERVICES_MAX_COUNT];
 	struct mutex shared_mem_lock; /* for shared_mem_list */
 	struct list_head shared_mem_list;
