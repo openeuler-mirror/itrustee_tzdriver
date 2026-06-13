@@ -388,6 +388,7 @@ struct smc_event_data *find_event_control(unsigned int agent_id, unsigned int ns
 
 void show_agent_event_status(void)
 {
+#ifndef CONFIG_DISABLE_SHOW_AGENT_STATUS
 	struct smc_event_data *event_data = NULL;
 	unsigned long flags;
 
@@ -402,6 +403,7 @@ void show_agent_event_status(void)
 			event_data->work_info.agent_response_succ_cnt);
 	}
 	spin_unlock_irqrestore(&g_agent_control.lock, flags);
+#endif
 }
 
 static void unmap_agent_buffer(struct smc_event_data *event_data)
