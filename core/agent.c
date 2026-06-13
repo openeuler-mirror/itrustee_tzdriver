@@ -892,7 +892,6 @@ static int is_agent_already_exist(unsigned int agent_id, struct smc_event_data *
 		if (agent_node->agent_id == agent_id && is_same_group(agent_node->nsid, agent_node->vmid, nsid, vmid) == true) {
 			if (atomic_read(&agent_node->agent_ready) != AGENT_CRASHED &&
 				atomic_read(&agent_node->agent_ready) != AGENT_PENDING) {
-				tloge("no allow agent proc to reg twice\n");
 				spin_unlock_irqrestore(&g_agent_control.lock, flags);
 				return -EINVAL;
 			}
@@ -1006,8 +1005,11 @@ int tc_ns_register_agent(struct tc_ns_dev_file *dev_file,
 
 	size_align = ALIGN(buffer_size, SZ_4K);
 
-	if (is_agent_already_exist(agent_id, &event_data, dev_file, &find_flag))
+	if (is_agent_already_exist(agent_id, &event_data, dev_file, &find_flag)) {
+		tloge("no allow agent proc to reg twice\n");
 		return ret;
+	}
+
 	if (find_flag == AGENT_NO_EXIST) {
 		struct agent_pair agent_pair = { agent_id, nsid, vmid };
 		ret = create_new_agent_node(dev_file, &event_data,
