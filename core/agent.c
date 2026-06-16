@@ -352,6 +352,11 @@ void send_crashed_event_response_single(const struct tc_ns_dev_file *dev_file)
 			agent_id = event_data->agent_id;
 			nsid = event_data->nsid;
 			vmid = event_data->vmid;
+			/* when driver fd is closed, the agent should be unregistered or crashed.
+			 * In these cases, the agent_buffer_user is no need to do mailbox_free
+			 */
+			if (current->mm != NULL && event_data->agent_buff_user != NULL)
+				(void)vm_munmap((unsigned long)(uintptr_t)event_data->agent_buff_user, event_data->agent_buff_size);
 			event_data->agent_buff_user = NULL;
 			need_unreg = !(atomic_read(&event_data->agent_ready) == AGENT_PENDING) &&
 				!(atomic_read(&event_data->agent_ready) == AGENT_UNREGISTERED);
@@ -904,6 +909,11 @@ static int is_agent_already_exist(unsigned int agent_id, struct smc_event_data *
 				spin_unlock_irqrestore(&g_agent_control.lock, flags);
 				return -EINVAL;
 			}
+			if (agent_node->owner != NULL) {
+				tloge("someone try reg other agent_node");
+				spin_unlock_irqrestore(&g_agent_control.lock, flags);
+				return -EINVAL;
+			}
 			if (atomic_read(&agent_node->agent_ready) == AGENT_CRASHED)
 				flag = AGENT_HAS_CRASHED;
 			else
@@ -1158,6 +1168,11 @@ void send_crashed_event_response_all(const struct tc_ns_dev_file *dev_file)
 			nsids[i] = event_data->nsid;
 			vmids[i] = event_data->vmid;
 			agent_id[i] = event_data->agent_id;
+			/* when driver fd is closed, the agent should be unregistered or crashed.
+			 * In these cases, the agent_buffer_user is no need to do mailbox_free
+			 */
+			if (current->mm != NULL && event_data->agent_buff_user != NULL)
+				(void)vm_munmap((unsigned long)(uintptr_t)event_data->agent_buff_user, event_data->agent_buff_size);
 			event_data->agent_buff_user = NULL;
 			need_unregs[i++] = !(atomic_read(&event_data->agent_ready) == AGENT_PENDING) &&
 				!(atomic_read(&event_data->agent_ready) == AGENT_UNREGISTERED);
