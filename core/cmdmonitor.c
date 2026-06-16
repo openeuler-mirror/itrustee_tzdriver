@@ -405,10 +405,12 @@ void cmd_monitor_logend(struct cmd_monitor *item)
 	 * 1 year means 1000000 * (60*60*24*365) = 0x1CAE8C13E000
 	 * only 6bytes, will not overflow
 	 */
+	mutex_lock(&g_cmd_monitor_lock);
 	timedif = S_TO_US * (nowtime.ts.tv_sec - item->sendtime.ts.tv_sec) +
 		(nowtime.ts.tv_nsec - item->sendtime.ts.tv_nsec) / S_TO_MS;
 	item->timetotal += timedif;
 	item->returned = true;
+	mutex_unlock(&g_cmd_monitor_lock);
 }
 
 void do_cmd_need_archivelog(void)
