@@ -1011,9 +1011,7 @@ int tc_ns_register_agent(struct tc_ns_dev_file *dev_file,
 	int ret = -EINVAL;
 	uint32_t find_flag = AGENT_NO_EXIST;
 	void *agent_buff = NULL;
-	uint32_t size_align;
-	uint32_t nsid = dev_file->nsid;
-	uint32_t vmid = dev_file->vmid;
+	uint32_t size_align, nsid = dev_file->nsid, vmid = dev_file->vmid;
 
 	/* dev can be null */
 	if (!buffer)
@@ -1032,6 +1030,9 @@ int tc_ns_register_agent(struct tc_ns_dev_file *dev_file,
 			&agent_pair, &agent_buff, size_align);
 		if (ret != 0)
 			return ret;
+	} else if (size_align != event_data->agent_buff_size) {
+		put_agent_event(event_data);
+		return -EINVAL;
 	}
 
 	if (get_agent_buffer(event_data, user_agent, buffer))
