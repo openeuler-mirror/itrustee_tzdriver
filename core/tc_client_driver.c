@@ -790,31 +790,6 @@ static int tc_client_mmap(struct file *filp, struct vm_area_struct *vma)
 	return ret;
 }
 
-static int ioctl_register_agent(struct tc_ns_dev_file *dev_file, unsigned long arg)
-{
-	int ret;
-	struct agent_ioctl_args args;
-
-	if (arg == 0) {
-		tloge("arg is NULL\n");
-		return -EFAULT;
-	}
-
-	if (copy_from_user(&args, (void *)(uintptr_t)arg, sizeof(args)) != 0) {
-		tloge("copy agent args failed\n");
-		return -EFAULT;
-	}
-
-	ret = tc_ns_register_agent(dev_file, args.id, args.buffer_size,
-		&args.buffer, true);
-	if (ret == 0) {
-		if (copy_to_user((void *)(uintptr_t)arg, &args, sizeof(args)) != 0)
-			tloge("copy agent user addr failed\n");
-	}
-
-	return ret;
-}
-
 static int ioctl_check_agent_owner(const struct tc_ns_dev_file *dev_file, unsigned int agent_id)
 {
 	struct smc_event_data *event_data = NULL;
@@ -833,6 +808,77 @@ static int ioctl_check_agent_owner(const struct tc_ns_dev_file *dev_file, unsign
 
 	put_agent_event(event_data);
 	return 0;
+}
+
+static int ioctl_wait_event(struct tc_ns_dev_file *dev_file, unsigned int agent_id, bool is_from_client_node,
+	unsigned int nsid, unsigned int vmid)
+{
+	if (ioctl_check_agent_owner(dev_file, agent_id) != 0)
+		return -EINVAL;
+	if (is_from_client_node && (check_ext_agent_access(agent_id) != 0)) {
+		tloge("the agent is not access\n");
+		return -EPERM;
+	}
+	return tc_ns_wait_event(agent_id, nsid, vmid);
+}
+
+static int ioctl_send_event_response(struct tc_ns_dev_file *dev_file, unsigned int agent_id, bool is_from_client_node,
+	unsigned int nsid, unsigned int vmid)
+{
+	if (ioctl_check_agent_owner(dev_file, agent_id) != 0)
+		return -EINVAL;
+	if (is_from_client_node && (check_ext_agent_access(agent_id) != 0)) {
+		tloge("the agent is not access\n");
+		return -EPERM;
+	}
+	return tc_ns_send_event_response(agent_id, nsid, vmid);
+}
+
+static int ioctl_unregister_agent(struct tc_ns_dev_file *dev_file, unsigned int agent_id, bool is_from_client_node,
+	unsigned int nsid, unsigned int vmid)
+{
+	/* we set mm when register and check when unregister, to avoid PUAF */
+	if (dev_file->mm != current->mm) {
+		tloge("check agent mm not valid\n");
+		return -EPERM;
+	}
+	if (ioctl_check_agent_owner(dev_file, agent_id) != 0)
+		return -EINVAL;
+	if (is_from_client_node && (check_ext_agent_access(agent_id) != 0)) {
+		tloge("the agent is not access\n");
+		return -EPERM;
+	}
+	return tc_ns_unregister_agent(agent_id, nsid, vmid);
+}
+
+static int ioctl_register_agent(struct tc_ns_dev_file *dev_file, unsigned long arg, bool is_from_client_node)
+{
+	int ret;
+	struct agent_ioctl_args args;
+
+	if (arg == 0) {
+		tloge("arg is NULL\n");
+		return -EFAULT;
+	}
+
+	if (copy_from_user(&args, (void *)(uintptr_t)arg, sizeof(args)) != 0) {
+		tloge("copy agent args failed\n");
+		return -EFAULT;
+	}
+
+	if (is_from_client_node && (check_ext_agent_access(args.id) != 0)) {
+		tloge("the agent is not access\n");
+		return -EPERM;
+	}
+
+	ret = tc_ns_register_agent(dev_file, args.id, args.buffer_size, &args.buffer, true);
+	if (ret == 0) {
+		dev_file->mm = current->mm;
+		if (copy_to_user((void *)(uintptr_t)arg, &args, sizeof(args)) != 0)
+			tloge("copy agent user addr failed\n");
+	}
+
+	return ret;
 }
 
 static int ioctl_check_is_ccos(void __user *argp)
@@ -864,22 +910,16 @@ int public_ioctl(const struct file *file, unsigned int cmd, unsigned long arg, b
 
 	switch (cmd) {
 	case TC_NS_CLIENT_IOCTL_WAIT_EVENT:
-		if (ioctl_check_agent_owner(dev_file, (unsigned int)arg) != 0)
-			return -EINVAL;
-		ret = tc_ns_wait_event((unsigned int)arg, nsid, vmid);
+		ret = ioctl_wait_event((unsigned int)arg, is_from_client_node, nsid, vmid);
 		break;
 	case TC_NS_CLIENT_IOCTL_SEND_EVENT_RESPONSE:
-		if (ioctl_check_agent_owner(dev_file, (unsigned int)arg) != 0)
-			return -EINVAL;
-		ret = tc_ns_send_event_response((unsigned int)arg, nsid, vmid);
+		ret = ioctl_send_event_response((unsigned int)arg, is_from_client_node, nsid, vmid);
 		break;
 	case TC_NS_CLIENT_IOCTL_REGISTER_AGENT:
-		ret = ioctl_register_agent(dev_file, arg);
+		ret = ioctl_register_agent(dev_file, arg, is_from_client_node);
 		break;
 	case TC_NS_CLIENT_IOCTL_UNREGISTER_AGENT:
-		if (ioctl_check_agent_owner(dev_file, (unsigned int)arg) != 0)
-			return -EINVAL;
-		ret = tc_ns_unregister_agent((unsigned int)arg, nsid, vmid);
+		ret = ioctl_unregister_agent((unsigned int)arg, is_from_client_node, nsid, vmid);
 		break;
 	case TC_NS_CLIENT_IOCTL_LOAD_APP_REQ:
 		ret = tc_ns_load_secfile(file->private_data, argp, NULL, is_from_client_node);
@@ -918,45 +958,16 @@ static int tc_ns_send_cancel_cmd(struct tc_ns_dev_file *dev_file, void *argp)
 	return 0;
 }
 
-static int get_agent_id(unsigned long arg, unsigned int cmd, uint32_t *agent_id)
-{
-	struct agent_ioctl_args args;
-	switch (cmd) {
-	case TC_NS_CLIENT_IOCTL_WAIT_EVENT:
-	case TC_NS_CLIENT_IOCTL_SEND_EVENT_RESPONSE:
-	case TC_NS_CLIENT_IOCTL_UNREGISTER_AGENT:
-		*agent_id = (unsigned int)arg;
-		break;
-	case TC_NS_CLIENT_IOCTL_REGISTER_AGENT:
-		if (copy_from_user(&args, (void *)(uintptr_t)arg, sizeof(args)) != 0) {
-			tloge("copy agent args failed\n");
-			return -EFAULT;
-		}
-		*agent_id = args.id;
-		break;
-	default:
-		return -EFAULT;
-	}
-	return 0;
-}
-
 static int tc_client_agent_ioctl(const struct file *file, unsigned int cmd,
 	unsigned long arg)
 {
 	int ret = -EFAULT;
-	uint32_t agent_id;
 
 	switch (cmd) {
 	case TC_NS_CLIENT_IOCTL_SEND_EVENT_RESPONSE:
 	case TC_NS_CLIENT_IOCTL_WAIT_EVENT:
 	case TC_NS_CLIENT_IOCTL_REGISTER_AGENT:
 	case TC_NS_CLIENT_IOCTL_UNREGISTER_AGENT:
-		if (get_agent_id(arg, cmd, &agent_id) != 0)
-			return ret;
-		if (check_ext_agent_access(agent_id) != 0) {
-			tloge("the agent is not access\n");
-			return -EPERM;
-		}
 		ret = public_ioctl(file, cmd, arg, true);
 		break;
 	default:
