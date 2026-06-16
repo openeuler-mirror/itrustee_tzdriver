@@ -554,7 +554,6 @@ int agent_process_work(const struct tc_ns_smc_cmd *smc_cmd,
 		tlogi("agent 0x%x nsid 0x%x vmid 0x%x is ready to release\n", agent_id, nsid, vmid);
 
 		free_event_control(event_data);
-		put_agent_event(event_data);
 		ret = 0;
 		goto reset_context;
 	}
@@ -570,7 +569,6 @@ int agent_process_work(const struct tc_ns_smc_cmd *smc_cmd,
 
 	ret = wait_agent_response(event_data);
 	atomic_set(&event_data->ca_run, 0);
-	put_agent_event(event_data);
 	event_data->work_info.agent_response_succ_cnt++;
 	event_data->work_info.agent_status = AGENT_REE_THREAD_WORK_DONE;
 
@@ -581,6 +579,7 @@ reset_context:
 	 */
 	cmd_monitor_reset_context();
 	event_data->work_info.agent_status = AGENT_RET_TO_TEE;
+	put_agent_event(event_data);
 	return ret;
 }
 
