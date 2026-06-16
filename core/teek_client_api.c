@@ -393,6 +393,28 @@ static bool is_oper_param_valid(const struct teec_operation *operation)
 	return true;
 }
 
+static uint32_t set_login_setup(struct tc_ns_dev_file *dev_file, const struct teec_operation *operation)
+{
+	dev_file->pkg_name_len = operation->params[3].tmpref.size;
+	if (operation->params[3].tmpref.size > MAX_PACKAGE_NAME_LEN - 1) {
+		return TEEC_ERROR_BAD_PARAMETERS;
+	} else {
+		if (memset_s(dev_file->pkg_name, sizeof(dev_file->pkg_name), 0, MAX_PACKAGE_NAME_LEN) != 0) {
+			tloge("memset error\n");
+			return TEEC_ERROR_BAD_PARAMETERS;
+		}
+		if (memcpy_s(dev_file->pkg_name, sizeof(dev_file->pkg_name),
+			operation->params[3].tmpref.buffer, operation->params[3].tmpref.size) != 0) {
+			tloge("memcpy error\n");
+			return TEEC_ERROR_BAD_PARAMETERS;
+		}
+	}
+
+	dev_file->pub_key_len = 0;
+	dev_file->login_setup = 1;
+	return 0;
+}
+
 static uint32_t check_open_sess_params(struct teec_context *context,
 	const struct teec_operation *operation, const struct teec_uuid *destination,
 	uint32_t connection_method)
@@ -415,25 +437,12 @@ static uint32_t check_open_sess_params(struct teec_context *context,
 		return TEEC_ERROR_BAD_PARAMETERS;
 	}
 
-	dev_file->pkg_name_len = operation->params[3].tmpref.size;
-	if (operation->params[3].tmpref.size > MAX_PACKAGE_NAME_LEN - 1) {
-		return TEEC_ERROR_BAD_PARAMETERS;
-	} else {
-		if (memset_s(dev_file->pkg_name, sizeof(dev_file->pkg_name),
-			0, MAX_PACKAGE_NAME_LEN) != 0) {
-			tloge("memset error\n");
-			return TEEC_ERROR_BAD_PARAMETERS;
-		}
-		if (memcpy_s(dev_file->pkg_name, sizeof(dev_file->pkg_name),
-			operation->params[3].tmpref.buffer,
-			operation->params[3].tmpref.size) != 0) {
-			tloge("memcpy error\n");
-			return TEEC_ERROR_BAD_PARAMETERS;
-		}
-	}
+	mutex_lock(&dev_file->login_setup_lock);
+	teec_ret = set_login_setup(dev_file, operation);
+	mutex_unlock(&dev_file->login_setup_lock);
+	if (teec_ret != TEEC_SUCCESS)
+		return teec_ret;
 
-	dev_file->pub_key_len = 0;
-	dev_file->login_setup = 1;
 	teec_ret = teek_check_operation(operation);
 	if (teec_ret != TEEC_SUCCESS) {
 		tloge("operation is invalid\n");
