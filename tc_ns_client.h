@@ -269,6 +269,14 @@ static inline int set_vmid_value(unsigned int val, unsigned int *vmid)
 #define REE_VIRTUAL_HOST_VMID 0xffffffff
 #define REE_CONTAINER_HOST_VMID 0
 
+static inline bool is_valid_vm(unsigned int vmid)
+{
+	if (get_ree_load_mode() == REE_VIRTUAL)
+		return vmid != 0 && vmid != REE_VIRTUAL_HOST_VMID; /* 0 is invalid, 0xffffffff is host */
+	else
+		return false;
+}
+
 static inline void init_nsid_vmid(unsigned int *nsid, unsigned int *vmid)
 {
 #ifdef CONFIG_CONFIDENTIAL_CONTAINER
