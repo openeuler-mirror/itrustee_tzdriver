@@ -2099,7 +2099,10 @@ free_siq_worker:
 	kthread_stop(g_siq_thread);
 	g_siq_thread = NULL;
 free_mem:
-	free_cmd_mem((uint64_t)(uintptr_t)g_cmd_data);
+	if (g_reserved_cmd_buffer)
+		iounmap((void __iomem *)g_cmd_data);
+	else
+		free_cmd_mem((uint64_t)(uintptr_t)g_cmd_data);
 	g_cmd_data = NULL;
 	return ret;
 }
