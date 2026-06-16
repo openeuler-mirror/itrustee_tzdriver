@@ -35,6 +35,7 @@
 #include <linux/thread_info.h>
 #include <linux/highmem.h>
 #include <linux/mm.h>
+#include <linux/freezer.h>
 #if (KERNEL_VERSION(4, 14, 0) <= LINUX_VERSION_CODE)
 #include <linux/sched/mm.h>
 #include <linux/sched/signal.h>
@@ -76,7 +77,7 @@ static int lock_interruptible(struct mutex *m)
 		/* signal */
 		if (ret == -EINTR) {
 			/* kill signal */
-			if (current_sigkill_pending())
+			if (sigkill_pending(current))
 				return ret;
 
 			/* other signal or freezer */

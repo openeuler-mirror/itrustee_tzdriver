@@ -955,16 +955,16 @@ int public_ioctl(const struct file *file, unsigned int cmd, unsigned long arg, b
 
 	switch (cmd) {
 	case TC_NS_CLIENT_IOCTL_WAIT_EVENT:
-		ret = ioctl_wait_event((unsigned int)arg, is_from_client_node, nsid, vmid);
+		ret = ioctl_wait_event(dev_file, (unsigned int)arg, is_from_client_node, nsid, vmid);
 		break;
 	case TC_NS_CLIENT_IOCTL_SEND_EVENT_RESPONSE:
-		ret = ioctl_send_event_response((unsigned int)arg, is_from_client_node, nsid, vmid);
+		ret = ioctl_send_event_response(dev_file, (unsigned int)arg, is_from_client_node, nsid, vmid);
 		break;
 	case TC_NS_CLIENT_IOCTL_REGISTER_AGENT:
 		ret = ioctl_register_agent(dev_file, arg, is_from_client_node);
 		break;
 	case TC_NS_CLIENT_IOCTL_UNREGISTER_AGENT:
-		ret = ioctl_unregister_agent((unsigned int)arg, is_from_client_node, nsid, vmid);
+		ret = ioctl_unregister_agent(dev_file, (unsigned int)arg, is_from_client_node, nsid, vmid);
 		break;
 	case TC_NS_CLIENT_IOCTL_LOAD_APP_REQ:
 		ret = tc_ns_load_secfile(file->private_data, argp, NULL, is_from_client_node);
