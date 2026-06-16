@@ -21,6 +21,15 @@
 
 #include <linux/types.h>
 
+struct os_version {
+        uint32_t magic;
+        uint32_t major_version;
+        uint32_t minor_version;
+        uint32_t reserved[8];
+        uint32_t feature_ccos : 1;
+        uint32_t feature_reserved : 31;
+};
+
 /*
  * this version number MAJOR.MINOR is used
  * to identify the compatibility of tzdriver and teeos
@@ -34,7 +43,6 @@
 #define TEEOS_CONFIDENTIAL_OS_FLAG 1
 
 #define VER_CHECK_MAGIC_NUM 0x5A5A5A5A
-#define COMPAT_LEVEL_BUF_LEN 12
 
 int32_t check_teeos_compat_level(const uint32_t *buffer, uint32_t size);
 bool is_ccos(void);

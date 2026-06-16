@@ -2047,8 +2047,7 @@ int parse_params_from_tee(void)
 	}
 
 	buffer = (void *)(g_cmd_data->in);
-	ret = check_teeos_compat_level((uint32_t *)buffer,
-		COMPAT_LEVEL_BUF_LEN);
+	ret = check_teeos_compat_level((uint32_t *)buffer, sizeof(struct os_version));
 	if (ret != 0) {
 		tloge("check teeos compatibility failed\n");
 		return ret;
