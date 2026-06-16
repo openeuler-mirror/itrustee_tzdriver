@@ -525,9 +525,6 @@ int tc_ns_client_open(struct tc_ns_dev_file **dev_file, uint8_t kernel_api)
 		return -ENOMEM;
 	}
 
-	mutex_lock(&g_tc_ns_dev_list.dev_lock);
-	list_add_tail(&dev->head, &g_tc_ns_dev_list.dev_file_list);
-	mutex_unlock(&g_tc_ns_dev_list.dev_lock);
 	mutex_lock(&g_device_file_cnt_lock);
 	dev->dev_file_id = g_device_file_cnt;
 	g_device_file_cnt++;
@@ -551,6 +548,9 @@ int tc_ns_client_open(struct tc_ns_dev_file **dev_file, uint8_t kernel_api)
 #ifdef CONFIG_TEE_TELEPORT_SUPPORT
 	dev->portal_enabled = false;
 #endif
+	mutex_lock(&g_tc_ns_dev_list.dev_lock);
+	list_add_tail(&dev->head, &g_tc_ns_dev_list.dev_file_list);
+	mutex_unlock(&g_tc_ns_dev_list.dev_lock);
 	*dev_file = dev;
 
 	return 0;
