@@ -768,9 +768,9 @@ static int tc_client_mmap(struct file *filp, struct vm_area_struct *vma)
 		return ret;
 	}
 #if (KERNEL_VERSION(6, 4, 0) <= LINUX_VERSION_CODE)
-	vma->__vm_flags |= VM_DONTCOPY;
+	vma->__vm_flags |= (VM_DONTCOPY | VM_DONTEXPAND);
 #else
-	vma->vm_flags |= VM_DONTCOPY;
+	vma->vm_flags |= (VM_DONTCOPY | VM_DONTEXPAND);
 #endif
 	vma->vm_ops = &g_shared_remap_vm_ops;
 	shared_vma_open(vma);

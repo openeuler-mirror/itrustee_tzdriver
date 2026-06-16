@@ -845,7 +845,11 @@ static unsigned long agent_buffer_map(unsigned long buffer, uint32_t size)
 		tloge("user_addr is not valid in vma");
 		goto err_out;
 	}
-
+#if (KERNEL_VERSION(6, 4, 0) <= LINUX_VERSION_CODE)
+	vma->__vm_flags |= (VM_DONTCOPY | VM_DONTEXPAND);
+#else
+	vma->vm_flags |= (VM_DONTCOPY | VM_DONTEXPAND);
+#endif
 	ret = remap_pfn_range(vma, user_addr, buffer >> PAGE_SHIFT, size,
 		vma->vm_page_prot);
 	if (ret != 0) {
