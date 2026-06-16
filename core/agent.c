@@ -890,6 +890,13 @@ static int is_agent_already_exist(unsigned int agent_id, struct smc_event_data *
 	uint32_t vmid = dev_file->vmid;
 	spin_lock_irqsave(&g_agent_control.lock, flags);
 	list_for_each_entry(agent_node, &g_agent_control.agent_list, head) {
+		if (agent_node->owner == dev_file) {
+			tloge("one fd reg two agent is not allowed");
+			spin_unlock_irqrestore(&g_agent_control.lock, flags);
+			return -EPERM;
+		}
+	}
+	list_for_each_entry(agent_node, &g_agent_control.agent_list, head) {
 		if (agent_node->agent_id == agent_id && is_same_group(agent_node->nsid, agent_node->vmid, nsid, vmid) == true) {
 			if (atomic_read(&agent_node->agent_ready) != AGENT_CRASHED &&
 				atomic_read(&agent_node->agent_ready) != AGENT_PENDING) {
@@ -1178,10 +1185,8 @@ void tee_agent_clear_dev_owner(const struct tc_ns_dev_file *dev_file)
 	spin_lock_irqsave(&g_agent_control.lock, flags);
 	list_for_each_entry_safe(event_data, tmp, &g_agent_control.agent_list,
 		head) {
-		if (event_data->owner == dev_file) {
+		if (event_data->owner == dev_file)
 			event_data->owner = NULL;
-			break;
-		}
 	}
 	spin_unlock_irqrestore(&g_agent_control.lock, flags);
 }
