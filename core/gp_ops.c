@@ -426,7 +426,7 @@ static int alloc_for_ref_mem(const struct tc_call_params *call_params,
 		&call_params->dev->shared_mem_list, head) {
 		buffer_addr = (void *)(uintptr_t)(client_param->memref.buffer |
 			((uint64_t)client_param->memref.buffer_h_addr << ADDR_TRANS_NUM));
-		if (shared_mem->user_addr != buffer_addr)
+		if (shared_mem->user_addr != buffer_addr || shared_mem->addr_corrupted || shared_mem->addr_ca_corrupted)
 			continue;
 		if (!is_refmem_offset_valid(shared_mem, client_param,
 			buffer_size)) {

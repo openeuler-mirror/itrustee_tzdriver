@@ -585,6 +585,25 @@ static void free_groupid_list(struct tc_ns_dev_file *dev)
 }
 #endif
 
+static void clear_sharedmem(struct tc_ns_dev_file *dev_file)
+{
+	struct tc_ns_shared_mem *shm = NULL, *shm_tmp = NULL;
+
+	mutex_lock(&dev_file->shared_mem_lock);
+	list_for_each_entry_safe(shm, shm_tmp, &dev_file->shared_mem_list, head) {
+		list_del(&shm->head);
+		if (shm->user_addr != INVALID_MAP_ADDR) {
+			shm->user_addr = INVALID_MAP_ADDR;
+			put_sharemem_struct(shm);
+		}
+		if (shm->user_addr_ca != INVALID_MAP_ADDR) {
+			shm->user_addr_ca = INVALID_MAP_ADDR;
+			put_sharemem_struct(shm);
+		}
+	}
+	mutex_unlock(&dev_file->shared_mem_lock);
+}
+
 void free_dev(struct tc_ns_dev_file *dev)
 {
 	del_dev_node(dev);
@@ -592,6 +611,7 @@ void free_dev(struct tc_ns_dev_file *dev)
 #ifdef CONFIG_CONFIDENTIAL_CONTAINER
 	free_groupid_list(dev);
 #endif
+	clear_sharedmem(dev);
 	if (memset_s(dev, sizeof(*dev), 0, sizeof(*dev)) != 0)
 		tloge("Caution, memset dev fail!\n");
 	kfree(dev);
@@ -617,9 +637,36 @@ int tc_ns_client_close(struct tc_ns_dev_file *dev)
 	return 0;
 }
 
+static bool vma_in_addr(void *user_addr, unsigned long len, const struct vm_area_struct *vma)
+{
+	unsigned long addr = (unsigned long)user_addr;
+	unsigned long end = addr + len;
+
+	return vma->vm_start < end && vma->vm_end > addr;
+}
+
 void shared_vma_open(struct vm_area_struct *vma)
 {
-	(void)vma;
+	struct tc_ns_shared_mem *shared_mem = NULL, *shared_mem_temp = NULL;
+	struct tc_ns_dev_file *dev_file = NULL;
+
+	if (!vma || !vma->vm_private_data)
+		return;
+	dev_file = vma->vm_private_data;
+	mutex_lock(&dev_file->shared_mem_lock);
+	list_for_each_entry_safe(shared_mem, shared_mem_temp, &dev_file->shared_mem_list, head) {
+		if (vma_in_addr(shared_mem->user_addr, (unsigned long)shared_mem->len, vma)) {
+			tloge("sharemem corrupted\n");
+			shared_mem->addr_corrupted = true;
+			break;
+		}
+		if (vma_in_addr(shared_mem->user_addr_ca, (unsigned long)shared_mem->len, vma)) {
+			tloge("sharemem corrupted ca\n");
+			shared_mem->addr_ca_corrupted = true;
+			break;
+		}
+	}
+	mutex_unlock(&dev_file->shared_mem_lock);
 }
 
 void shared_vma_close(struct vm_area_struct *vma)
@@ -628,10 +675,9 @@ void shared_vma_close(struct vm_area_struct *vma)
 	struct tc_ns_shared_mem *shared_mem_temp = NULL;
 	bool find = false;
 	struct tc_ns_dev_file *dev_file = NULL;
-	if (!vma) {
-		tloge("vma is null\n");
+	if (!vma)
 		return;
-	}
+
 	dev_file = vma->vm_private_data;
 	if (!dev_file) {
 		tloge("vm private data is null\n");
@@ -643,11 +689,11 @@ void shared_vma_close(struct vm_area_struct *vma)
 			&dev_file->shared_mem_list, head) {
 		if (shared_mem) {
 			if (shared_mem->user_addr ==
-				(void *)(uintptr_t)vma->vm_start) {
+				(void *)(uintptr_t)vma->vm_start && !shared_mem->addr_corrupted) {
 				shared_mem->user_addr = INVALID_MAP_ADDR;
 				find = true;
 			} else if (shared_mem->user_addr_ca ==
-				(void *)(uintptr_t)vma->vm_start) {
+				(void *)(uintptr_t)vma->vm_start && !shared_mem->addr_ca_corrupted) {
 				shared_mem->user_addr_ca = INVALID_MAP_ADDR;
 				find = true;
 			}
@@ -773,7 +819,6 @@ static int tc_client_mmap(struct file *filp, struct vm_area_struct *vma)
 	vma->vm_flags |= (VM_DONTCOPY | VM_DONTEXPAND);
 #endif
 	vma->vm_ops = &g_shared_remap_vm_ops;
-	shared_vma_open(vma);
 	vma->vm_private_data = (void *)dev_file;
 
 	if (only_remap) {

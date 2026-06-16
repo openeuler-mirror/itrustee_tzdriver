@@ -59,6 +59,8 @@ static void init_shared_mem(struct tc_ns_shared_mem *sh, void *addr, size_t len)
 	sh->len = (uint32_t)len;
 	sh->user_addr = INVALID_MAP_ADDR;
 	sh->user_addr_ca = INVALID_MAP_ADDR;
+	sh->addr_corrupted = false;
+	sh->addr_ca_corrupted = false;
 	atomic_set(&sh->usage, 0);
 }
 struct tc_ns_shared_mem *tc_mem_allocate(size_t len)
