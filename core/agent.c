@@ -1002,9 +1002,8 @@ int tc_ns_register_agent(struct tc_ns_dev_file *dev_file,
 {
 	struct smc_event_data *event_data = NULL;
 	int ret = -EINVAL;
-	uint32_t find_flag = AGENT_NO_EXIST;
 	void *agent_buff = NULL;
-	uint32_t size_align, nsid = dev_file->nsid, vmid = dev_file->vmid;
+	uint32_t size_align, nsid = dev_file->nsid, vmid = dev_file->vmid, find_flag = AGENT_NO_EXIST;
 
 	/* dev can be null */
 	if (!buffer)
@@ -1024,6 +1023,7 @@ int tc_ns_register_agent(struct tc_ns_dev_file *dev_file,
 		if (ret != 0)
 			return ret;
 	} else if (size_align != event_data->agent_buff_size) {
+		tloge("agent reuser size not match %u %u\n", size_align, event_data->agent_buff_size);
 		put_agent_event(event_data);
 		return -EINVAL;
 	}

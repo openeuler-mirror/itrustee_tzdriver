@@ -412,7 +412,7 @@ static uint32_t set_login_setup(struct tc_ns_dev_file *dev_file, const struct te
 
 	dev_file->pub_key_len = 0;
 	dev_file->login_setup = 1;
-	return 0;
+	return TEEC_SUCCESS;
 }
 
 static uint32_t check_open_sess_params(struct teec_context *context,

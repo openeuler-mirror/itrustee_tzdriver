@@ -592,6 +592,7 @@ static void clear_sharedmem(struct tc_ns_dev_file *dev_file)
 	mutex_lock(&dev_file->shared_mem_lock);
 	list_for_each_entry_safe(shm, shm_tmp, &dev_file->shared_mem_list, head) {
 		list_del(&shm->head);
+		tloge("detected sharedmem corrupted\n");
 		if (shm->user_addr != INVALID_MAP_ADDR) {
 			shm->user_addr = INVALID_MAP_ADDR;
 			put_sharemem_struct(shm);
