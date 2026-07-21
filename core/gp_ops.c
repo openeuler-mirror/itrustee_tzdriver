@@ -426,7 +426,7 @@ static int alloc_for_ref_mem(const struct tc_call_params *call_params,
 		&call_params->dev->shared_mem_list, head) {
 		buffer_addr = (void *)(uintptr_t)(client_param->memref.buffer |
 			((uint64_t)client_param->memref.buffer_h_addr << ADDR_TRANS_NUM));
-		if (shared_mem->user_addr != buffer_addr)
+		if (shared_mem->user_addr != buffer_addr || shared_mem->addr_corrupted || shared_mem->addr_ca_corrupted)
 			continue;
 		if (!is_refmem_offset_valid(shared_mem, client_param,
 			buffer_size)) {
@@ -456,6 +456,8 @@ static int alloc_for_ref_mem(const struct tc_call_params *call_params,
 	/* Change TEEC_MEMREF_PARTIAL_XXXXX  to TEE_PARAM_TYPE_MEMREF_XXXXX */
 	op_params->trans_paramtype[index] = param_type -
 		(TEEC_MEMREF_PARTIAL_INPUT - TEE_PARAM_TYPE_MEMREF_INPUT);
+
+	op_params->local_tmpbuf[index].size = buffer_size;
 
 	if (shared_mem->mem_type == RESERVED_TYPE)
 		op_params->trans_paramtype[index] +=
@@ -723,7 +725,6 @@ static int update_for_ref_mem(const struct tc_call_params *call_params,
 {
 	union tc_ns_client_param *client_param = NULL;
 	uint32_t buffer_size;
-	unsigned int orig_size = 0;
 	struct tc_ns_operation *operation = &op_params->mb_pack->operation;
 	uint64_t size_addr;
 
@@ -738,14 +739,6 @@ static int update_for_ref_mem(const struct tc_call_params *call_params,
 	size_addr = client_param->memref.size_addr |
 		((uint64_t)client_param->memref.size_h_addr << ADDR_TRANS_NUM);
 
-	if (read_from_client(&orig_size,
-		sizeof(orig_size),
-		(uint32_t __user *)(uintptr_t)size_addr,
-		sizeof(orig_size), call_params->dev->kernel_api) != 0) {
-		tloge("copy orig memref.size_addr failed\n");
-		return -EFAULT;
-	}
-
 	if (write_to_client((void *)(uintptr_t)size_addr,
 		sizeof(buffer_size),
 		&buffer_size, sizeof(buffer_size),
@@ -758,7 +751,7 @@ static int update_for_ref_mem(const struct tc_call_params *call_params,
 	if (operation->sharemem[index]->mem_type == RESERVED_TYPE)
 		return 0;
 	/* copy from mb_buffer to sharemem */
-	if (operation->mb_buffer[index] && orig_size >= buffer_size) {
+	if (operation->mb_buffer[index] && op_params->local_tmpbuf[index].size >= buffer_size) {
 		void *buffer_addr =
 			(void *)(uintptr_t)((uintptr_t)
 			operation->sharemem[index]->kernel_addr +

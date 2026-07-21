@@ -89,6 +89,8 @@ struct tc_ns_shared_mem {
 	struct list_head head;
 	atomic_t usage;
 	atomic_t offset;
+	bool addr_corrupted; /* if user space modified the memory by partial munmap or other operation */
+	bool addr_ca_corrupted;
 };
 
 struct tc_ns_service {
@@ -140,6 +142,7 @@ struct tc_ns_dev_file {
 #ifdef CONFIG_TEE_TELEPORT_SUPPORT
 	bool portal_enabled;
 #endif
+	struct mm_struct *mm;
 	struct mutex groupid_lock;
 	struct list_head groupid_list;
 };

@@ -352,6 +352,11 @@ void send_crashed_event_response_single(const struct tc_ns_dev_file *dev_file)
 			agent_id = event_data->agent_id;
 			nsid = event_data->nsid;
 			vmid = event_data->vmid;
+			/* when driver fd is closed, the agent should be unregistered or crashed.
+			 * In these cases, the agent_buffer_user is no need to do mailbox_free
+			 */
+			if (current->mm != NULL && event_data->agent_buff_user != NULL)
+				(void)vm_munmap((unsigned long)(uintptr_t)event_data->agent_buff_user, event_data->agent_buff_size);
 			event_data->agent_buff_user = NULL;
 			need_unreg = !(atomic_read(&event_data->agent_ready) == AGENT_PENDING) &&
 				!(atomic_read(&event_data->agent_ready) == AGENT_UNREGISTERED);
@@ -360,7 +365,7 @@ void send_crashed_event_response_single(const struct tc_ns_dev_file *dev_file)
 	}
 	spin_unlock_irqrestore(&g_agent_control.lock, flags);
 
-	if ((nsid != PROC_PID_INIT_INO || is_valid_vmid(vmid)) && need_unreg)
+	if ((nsid != PROC_PID_INIT_INO || is_valid_vm(vmid)) && need_unreg)
 		(void)tc_ns_unregister_agent(agent_id, nsid, vmid);
 
 	send_event_response(agent_id, nsid, vmid);
@@ -556,7 +561,6 @@ int agent_process_work(const struct tc_ns_smc_cmd *smc_cmd,
 		tlogi("agent 0x%x nsid 0x%x vmid 0x%x is ready to release\n", agent_id, nsid, vmid);
 
 		free_event_control(event_data);
-		put_agent_event(event_data);
 		ret = 0;
 		goto reset_context;
 	}
@@ -572,7 +576,6 @@ int agent_process_work(const struct tc_ns_smc_cmd *smc_cmd,
 
 	ret = wait_agent_response(event_data);
 	atomic_set(&event_data->ca_run, 0);
-	put_agent_event(event_data);
 	event_data->work_info.agent_response_succ_cnt++;
 	event_data->work_info.agent_status = AGENT_REE_THREAD_WORK_DONE;
 
@@ -583,6 +586,7 @@ reset_context:
 	 */
 	cmd_monitor_reset_context();
 	event_data->work_info.agent_status = AGENT_RET_TO_TEE;
+	put_agent_event(event_data);
 	return ret;
 }
 
@@ -848,7 +852,11 @@ static unsigned long agent_buffer_map(unsigned long buffer, uint32_t size)
 		tloge("user_addr is not valid in vma");
 		goto err_out;
 	}
-
+#if (KERNEL_VERSION(6, 4, 0) <= LINUX_VERSION_CODE)
+	vma->__vm_flags |= (VM_DONTCOPY | VM_DONTEXPAND);
+#else
+	vma->vm_flags |= (VM_DONTCOPY | VM_DONTEXPAND);
+#endif
 	ret = remap_pfn_range(vma, user_addr, buffer >> PAGE_SHIFT, size,
 		vma->vm_page_prot);
 	if (ret != 0) {
@@ -892,6 +900,11 @@ static int is_agent_already_exist(unsigned int agent_id, struct smc_event_data *
 		if (agent_node->agent_id == agent_id && is_same_group(agent_node->nsid, agent_node->vmid, nsid, vmid) == true) {
 			if (atomic_read(&agent_node->agent_ready) != AGENT_CRASHED &&
 				atomic_read(&agent_node->agent_ready) != AGENT_PENDING) {
+				spin_unlock_irqrestore(&g_agent_control.lock, flags);
+				return -EINVAL;
+			}
+			if (agent_node->owner != NULL) {
+				tloge("someone try reg other agent_node");
 				spin_unlock_irqrestore(&g_agent_control.lock, flags);
 				return -EINVAL;
 			}
@@ -990,11 +1003,8 @@ int tc_ns_register_agent(struct tc_ns_dev_file *dev_file,
 {
 	struct smc_event_data *event_data = NULL;
 	int ret = -EINVAL;
-	uint32_t find_flag = AGENT_NO_EXIST;
 	void *agent_buff = NULL;
-	uint32_t size_align;
-	uint32_t nsid = dev_file->nsid;
-	uint32_t vmid = dev_file->vmid;
+	uint32_t size_align, nsid = dev_file->nsid, vmid = dev_file->vmid, find_flag = AGENT_NO_EXIST;
 
 	/* dev can be null */
 	if (!buffer)
@@ -1016,6 +1026,10 @@ int tc_ns_register_agent(struct tc_ns_dev_file *dev_file,
 			&agent_pair, &agent_buff, size_align);
 		if (ret != 0)
 			return ret;
+	} else if (size_align != event_data->agent_buff_size) {
+		tloge("agent reuser size not match %u %u\n", size_align, event_data->agent_buff_size);
+		put_agent_event(event_data);
+		return -EINVAL;
 	}
 
 	if (get_agent_buffer(event_data, user_agent, buffer))
@@ -1152,6 +1166,11 @@ void send_crashed_event_response_all(const struct tc_ns_dev_file *dev_file)
 			nsids[i] = event_data->nsid;
 			vmids[i] = event_data->vmid;
 			agent_id[i] = event_data->agent_id;
+			/* when driver fd is closed, the agent should be unregistered or crashed.
+			 * In these cases, the agent_buffer_user is no need to do mailbox_free
+			 */
+			if (current->mm != NULL && event_data->agent_buff_user != NULL)
+				(void)vm_munmap((unsigned long)(uintptr_t)event_data->agent_buff_user, event_data->agent_buff_size);
 			event_data->agent_buff_user = NULL;
 			need_unregs[i++] = !(atomic_read(&event_data->agent_ready) == AGENT_PENDING) &&
 				!(atomic_read(&event_data->agent_ready) == AGENT_UNREGISTERED);
@@ -1162,7 +1181,7 @@ void send_crashed_event_response_all(const struct tc_ns_dev_file *dev_file)
 	for (i = 0; i < AGENT_MAX; i++) {
 		if (agent_id[i] == 0)
 			continue;
-		if ((nsids[i] != PROC_PID_INIT_INO || is_valid_vmid(vmids[i])) && need_unregs[i])
+		if ((nsids[i] != PROC_PID_INIT_INO || is_valid_vm(vmids[i])) && need_unregs[i])
 			(void)tc_ns_unregister_agent(agent_id[i], nsids[i], vmids[i]);
 		send_event_response(agent_id[i], nsids[i], vmids[i]);
 	}
@@ -1179,10 +1198,8 @@ void tee_agent_clear_dev_owner(const struct tc_ns_dev_file *dev_file)
 	spin_lock_irqsave(&g_agent_control.lock, flags);
 	list_for_each_entry_safe(event_data, tmp, &g_agent_control.agent_list,
 		head) {
-		if (event_data->owner == dev_file) {
+		if (event_data->owner == dev_file)
 			event_data->owner = NULL;
-			break;
-		}
 	}
 	spin_unlock_irqrestore(&g_agent_control.lock, flags);
 }

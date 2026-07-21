@@ -102,7 +102,7 @@ static void write_interrupt_trace_log(char *log_str_buffer)
 		}
 		if (is_interrupt_event(log_info.event_id) && g_int_log_fp != NULL) {
 			write_len = kernel_write(g_int_log_fp, log_str_buffer, len, &g_int_log_fp_pos);
-			if (write_len < 0) {
+			if (write_len < 0 || write_len != len) {
 				tloge("Failed to write interrupt trace log %zd\n", write_len);
 				return;
 			}
@@ -110,7 +110,7 @@ static void write_interrupt_trace_log(char *log_str_buffer)
 		if (g_event_log_fp == NULL)
 			return;
 		write_len = kernel_write(g_event_log_fp, log_str_buffer, len, &g_event_log_fp_pos);
-		if (write_len < 0) {
+		if (write_len < 0 || write_len != len) {
 			tloge("Failed to write event trace log %zd\n", write_len);
 			return;
 		}

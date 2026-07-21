@@ -525,9 +525,6 @@ int tc_ns_client_open(struct tc_ns_dev_file **dev_file, uint8_t kernel_api)
 		return -ENOMEM;
 	}
 
-	mutex_lock(&g_tc_ns_dev_list.dev_lock);
-	list_add_tail(&dev->head, &g_tc_ns_dev_list.dev_file_list);
-	mutex_unlock(&g_tc_ns_dev_list.dev_lock);
 	mutex_lock(&g_device_file_cnt_lock);
 	dev->dev_file_id = g_device_file_cnt;
 	g_device_file_cnt++;
@@ -551,6 +548,9 @@ int tc_ns_client_open(struct tc_ns_dev_file **dev_file, uint8_t kernel_api)
 #ifdef CONFIG_TEE_TELEPORT_SUPPORT
 	dev->portal_enabled = false;
 #endif
+	mutex_lock(&g_tc_ns_dev_list.dev_lock);
+	list_add_tail(&dev->head, &g_tc_ns_dev_list.dev_file_list);
+	mutex_unlock(&g_tc_ns_dev_list.dev_lock);
 	*dev_file = dev;
 
 	return 0;
@@ -585,6 +585,26 @@ static void free_groupid_list(struct tc_ns_dev_file *dev)
 }
 #endif
 
+static void clear_sharedmem(struct tc_ns_dev_file *dev_file)
+{
+	struct tc_ns_shared_mem *shm = NULL, *shm_tmp = NULL;
+
+	mutex_lock(&dev_file->shared_mem_lock);
+	list_for_each_entry_safe(shm, shm_tmp, &dev_file->shared_mem_list, head) {
+		list_del(&shm->head);
+		tloge("detected sharedmem corrupted\n");
+		if (shm->user_addr != INVALID_MAP_ADDR) {
+			shm->user_addr = INVALID_MAP_ADDR;
+			put_sharemem_struct(shm);
+		}
+		if (shm->user_addr_ca != INVALID_MAP_ADDR) {
+			shm->user_addr_ca = INVALID_MAP_ADDR;
+			put_sharemem_struct(shm);
+		}
+	}
+	mutex_unlock(&dev_file->shared_mem_lock);
+}
+
 void free_dev(struct tc_ns_dev_file *dev)
 {
 	del_dev_node(dev);
@@ -592,6 +612,7 @@ void free_dev(struct tc_ns_dev_file *dev)
 #ifdef CONFIG_CONFIDENTIAL_CONTAINER
 	free_groupid_list(dev);
 #endif
+	clear_sharedmem(dev);
 	if (memset_s(dev, sizeof(*dev), 0, sizeof(*dev)) != 0)
 		tloge("Caution, memset dev fail!\n");
 	kfree(dev);
@@ -617,9 +638,36 @@ int tc_ns_client_close(struct tc_ns_dev_file *dev)
 	return 0;
 }
 
+static bool vma_in_addr(void *user_addr, unsigned long len, const struct vm_area_struct *vma)
+{
+	unsigned long addr = (unsigned long)user_addr;
+	unsigned long end = addr + len;
+
+	return vma->vm_start < end && vma->vm_end > addr;
+}
+
 void shared_vma_open(struct vm_area_struct *vma)
 {
-	(void)vma;
+	struct tc_ns_shared_mem *shared_mem = NULL, *shared_mem_temp = NULL;
+	struct tc_ns_dev_file *dev_file = NULL;
+
+	if (!vma || !vma->vm_private_data)
+		return;
+	dev_file = vma->vm_private_data;
+	mutex_lock(&dev_file->shared_mem_lock);
+	list_for_each_entry_safe(shared_mem, shared_mem_temp, &dev_file->shared_mem_list, head) {
+		if (vma_in_addr(shared_mem->user_addr, (unsigned long)shared_mem->len, vma)) {
+			tloge("sharemem corrupted\n");
+			shared_mem->addr_corrupted = true;
+			break;
+		}
+		if (vma_in_addr(shared_mem->user_addr_ca, (unsigned long)shared_mem->len, vma)) {
+			tloge("sharemem corrupted ca\n");
+			shared_mem->addr_ca_corrupted = true;
+			break;
+		}
+	}
+	mutex_unlock(&dev_file->shared_mem_lock);
 }
 
 void shared_vma_close(struct vm_area_struct *vma)
@@ -628,10 +676,9 @@ void shared_vma_close(struct vm_area_struct *vma)
 	struct tc_ns_shared_mem *shared_mem_temp = NULL;
 	bool find = false;
 	struct tc_ns_dev_file *dev_file = NULL;
-	if (!vma) {
-		tloge("vma is null\n");
+	if (!vma)
 		return;
-	}
+
 	dev_file = vma->vm_private_data;
 	if (!dev_file) {
 		tloge("vm private data is null\n");
@@ -643,11 +690,11 @@ void shared_vma_close(struct vm_area_struct *vma)
 			&dev_file->shared_mem_list, head) {
 		if (shared_mem) {
 			if (shared_mem->user_addr ==
-				(void *)(uintptr_t)vma->vm_start) {
+				(void *)(uintptr_t)vma->vm_start && !shared_mem->addr_corrupted) {
 				shared_mem->user_addr = INVALID_MAP_ADDR;
 				find = true;
 			} else if (shared_mem->user_addr_ca ==
-				(void *)(uintptr_t)vma->vm_start) {
+				(void *)(uintptr_t)vma->vm_start && !shared_mem->addr_ca_corrupted) {
 				shared_mem->user_addr_ca = INVALID_MAP_ADDR;
 				find = true;
 			}
@@ -768,12 +815,11 @@ static int tc_client_mmap(struct file *filp, struct vm_area_struct *vma)
 		return ret;
 	}
 #if (KERNEL_VERSION(6, 4, 0) <= LINUX_VERSION_CODE)
-	vma->__vm_flags |= VM_DONTCOPY;
+	vma->__vm_flags |= (VM_DONTCOPY | VM_DONTEXPAND);
 #else
-	vma->vm_flags |= VM_DONTCOPY;
+	vma->vm_flags |= (VM_DONTCOPY | VM_DONTEXPAND);
 #endif
 	vma->vm_ops = &g_shared_remap_vm_ops;
-	shared_vma_open(vma);
 	vma->vm_private_data = (void *)dev_file;
 
 	if (only_remap) {
@@ -786,31 +832,6 @@ static int tc_client_mmap(struct file *filp, struct vm_area_struct *vma)
 	get_sharemem_struct(shared_mem);
 	list_add_tail(&shared_mem->head, &dev_file->shared_mem_list);
 	mutex_unlock(&dev_file->shared_mem_lock);
-
-	return ret;
-}
-
-static int ioctl_register_agent(struct tc_ns_dev_file *dev_file, unsigned long arg)
-{
-	int ret;
-	struct agent_ioctl_args args;
-
-	if (arg == 0) {
-		tloge("arg is NULL\n");
-		return -EFAULT;
-	}
-
-	if (copy_from_user(&args, (void *)(uintptr_t)arg, sizeof(args)) != 0) {
-		tloge("copy agent args failed\n");
-		return -EFAULT;
-	}
-
-	ret = tc_ns_register_agent(dev_file, args.id, args.buffer_size,
-		&args.buffer, true);
-	if (ret == 0) {
-		if (copy_to_user((void *)(uintptr_t)arg, &args, sizeof(args)) != 0)
-			tloge("copy agent user addr failed\n");
-	}
 
 	return ret;
 }
@@ -833,6 +854,77 @@ static int ioctl_check_agent_owner(const struct tc_ns_dev_file *dev_file, unsign
 
 	put_agent_event(event_data);
 	return 0;
+}
+
+static int ioctl_wait_event(struct tc_ns_dev_file *dev_file, unsigned int agent_id, bool is_from_client_node,
+	unsigned int nsid, unsigned int vmid)
+{
+	if (ioctl_check_agent_owner(dev_file, agent_id) != 0)
+		return -EINVAL;
+	if (is_from_client_node && (check_ext_agent_access(agent_id) != 0)) {
+		tloge("the agent is not access\n");
+		return -EPERM;
+	}
+	return tc_ns_wait_event(agent_id, nsid, vmid);
+}
+
+static int ioctl_send_event_response(struct tc_ns_dev_file *dev_file, unsigned int agent_id, bool is_from_client_node,
+	unsigned int nsid, unsigned int vmid)
+{
+	if (ioctl_check_agent_owner(dev_file, agent_id) != 0)
+		return -EINVAL;
+	if (is_from_client_node && (check_ext_agent_access(agent_id) != 0)) {
+		tloge("the agent is not access\n");
+		return -EPERM;
+	}
+	return tc_ns_send_event_response(agent_id, nsid, vmid);
+}
+
+static int ioctl_unregister_agent(struct tc_ns_dev_file *dev_file, unsigned int agent_id, bool is_from_client_node,
+	unsigned int nsid, unsigned int vmid)
+{
+	/* we set mm when register and check when unregister, to avoid PUAF */
+	if (dev_file->mm != current->mm) {
+		tloge("check agent mm not valid\n");
+		return -EPERM;
+	}
+	if (ioctl_check_agent_owner(dev_file, agent_id) != 0)
+		return -EINVAL;
+	if (is_from_client_node && (check_ext_agent_access(agent_id) != 0)) {
+		tloge("the agent is not access\n");
+		return -EPERM;
+	}
+	return tc_ns_unregister_agent(agent_id, nsid, vmid);
+}
+
+static int ioctl_register_agent(struct tc_ns_dev_file *dev_file, unsigned long arg, bool is_from_client_node)
+{
+	int ret;
+	struct agent_ioctl_args args;
+
+	if (arg == 0) {
+		tloge("arg is NULL\n");
+		return -EFAULT;
+	}
+
+	if (copy_from_user(&args, (void *)(uintptr_t)arg, sizeof(args)) != 0) {
+		tloge("copy agent args failed\n");
+		return -EFAULT;
+	}
+
+	if (is_from_client_node && (check_ext_agent_access(args.id) != 0)) {
+		tloge("the agent is not access\n");
+		return -EPERM;
+	}
+
+	ret = tc_ns_register_agent(dev_file, args.id, args.buffer_size, &args.buffer, true);
+	if (ret == 0) {
+		dev_file->mm = current->mm;
+		if (copy_to_user((void *)(uintptr_t)arg, &args, sizeof(args)) != 0)
+			tloge("copy agent user addr failed\n");
+	}
+
+	return ret;
 }
 
 static int ioctl_check_is_ccos(void __user *argp)
@@ -864,22 +956,16 @@ int public_ioctl(const struct file *file, unsigned int cmd, unsigned long arg, b
 
 	switch (cmd) {
 	case TC_NS_CLIENT_IOCTL_WAIT_EVENT:
-		if (ioctl_check_agent_owner(dev_file, (unsigned int)arg) != 0)
-			return -EINVAL;
-		ret = tc_ns_wait_event((unsigned int)arg, nsid, vmid);
+		ret = ioctl_wait_event(dev_file, (unsigned int)arg, is_from_client_node, nsid, vmid);
 		break;
 	case TC_NS_CLIENT_IOCTL_SEND_EVENT_RESPONSE:
-		if (ioctl_check_agent_owner(dev_file, (unsigned int)arg) != 0)
-			return -EINVAL;
-		ret = tc_ns_send_event_response((unsigned int)arg, nsid, vmid);
+		ret = ioctl_send_event_response(dev_file, (unsigned int)arg, is_from_client_node, nsid, vmid);
 		break;
 	case TC_NS_CLIENT_IOCTL_REGISTER_AGENT:
-		ret = ioctl_register_agent(dev_file, arg);
+		ret = ioctl_register_agent(dev_file, arg, is_from_client_node);
 		break;
 	case TC_NS_CLIENT_IOCTL_UNREGISTER_AGENT:
-		if (ioctl_check_agent_owner(dev_file, (unsigned int)arg) != 0)
-			return -EINVAL;
-		ret = tc_ns_unregister_agent((unsigned int)arg, nsid, vmid);
+		ret = ioctl_unregister_agent(dev_file, (unsigned int)arg, is_from_client_node, nsid, vmid);
 		break;
 	case TC_NS_CLIENT_IOCTL_LOAD_APP_REQ:
 		ret = tc_ns_load_secfile(file->private_data, argp, NULL, is_from_client_node);
@@ -918,45 +1004,16 @@ static int tc_ns_send_cancel_cmd(struct tc_ns_dev_file *dev_file, void *argp)
 	return 0;
 }
 
-static int get_agent_id(unsigned long arg, unsigned int cmd, uint32_t *agent_id)
-{
-	struct agent_ioctl_args args;
-	switch (cmd) {
-	case TC_NS_CLIENT_IOCTL_WAIT_EVENT:
-	case TC_NS_CLIENT_IOCTL_SEND_EVENT_RESPONSE:
-	case TC_NS_CLIENT_IOCTL_UNREGISTER_AGENT:
-		*agent_id = (unsigned int)arg;
-		break;
-	case TC_NS_CLIENT_IOCTL_REGISTER_AGENT:
-		if (copy_from_user(&args, (void *)(uintptr_t)arg, sizeof(args)) != 0) {
-			tloge("copy agent args failed\n");
-			return -EFAULT;
-		}
-		*agent_id = args.id;
-		break;
-	default:
-		return -EFAULT;
-	}
-	return 0;
-}
-
 static int tc_client_agent_ioctl(const struct file *file, unsigned int cmd,
 	unsigned long arg)
 {
 	int ret = -EFAULT;
-	uint32_t agent_id;
 
 	switch (cmd) {
 	case TC_NS_CLIENT_IOCTL_SEND_EVENT_RESPONSE:
 	case TC_NS_CLIENT_IOCTL_WAIT_EVENT:
 	case TC_NS_CLIENT_IOCTL_REGISTER_AGENT:
 	case TC_NS_CLIENT_IOCTL_UNREGISTER_AGENT:
-		if (get_agent_id(arg, cmd, &agent_id) != 0)
-			return ret;
-		if (check_ext_agent_access(agent_id) != 0) {
-			tloge("the agent is not access\n");
-			return -EPERM;
-		}
 		ret = public_ioctl(file, cmd, arg, true);
 		break;
 	default:

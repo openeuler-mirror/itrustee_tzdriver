@@ -230,7 +230,7 @@ void *mailbox_alloc(size_t size, unsigned int flag)
 
 	mutex_unlock(&g_mb_lock);
 	if (addr && ((flag & MB_FLAG_ZERO) != 0)) {
-		if (memset_s(addr, ALIGN(size, SZ_4K), 0, ALIGN(size, SZ_4K)) != 0) {
+		if (memset_s(addr, (1UL << order) * PAGE_SIZE, 0, (1UL << order) * PAGE_SIZE) != 0) {
 			tloge("clean mailbox failed\n");
 			mailbox_free(addr);
 			return NULL;

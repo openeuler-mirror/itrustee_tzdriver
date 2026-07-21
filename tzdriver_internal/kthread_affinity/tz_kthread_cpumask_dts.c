@@ -40,12 +40,15 @@ int get_kthread_cpumask(struct cpumask *cpumask)
 	ret = of_property_read_u32_index(ctrl_cpu_node, "ctrl_cpu_num", 0, &ctrl_cpu_num);
 	if (ret < 0) {
 		tloge("get ctrl cpu num failed, err=%d\n", ret);
+		of_node_put(ctrl_cpu_node);
 		return ret;
 	}
 	if (ctrl_cpu_num > num_online_cpus()) {
 		tloge("ctrl cpu num is invalid\n");
+		of_node_put(ctrl_cpu_node);
 		return -1;
 	}
+	of_node_put(ctrl_cpu_node);
 
 	for (i = 0; i < ctrl_cpu_num; i++)
 		cpumask_set_cpu(i, cpumask);

@@ -52,7 +52,7 @@ int fill_shared_mem_info(uint64_t start_vaddr, uint32_t pages_no,
 	struct pagelist_info *page_info = NULL;
 	struct page **pages = NULL;
 	uint64_t *phys_addr = NULL;
-	uint32_t page_num;
+	long page_num;
 	uint32_t i;
 
 	if (pages_no == 0)
@@ -71,10 +71,10 @@ int fill_shared_mem_info(uint64_t start_vaddr, uint32_t pages_no,
 	page_num = get_user_pages((uintptr_t)start_vaddr, pages_no, FOLL_WRITE, pages, NULL);
 #endif
 	up_read(&mm_sem_lock(current->mm));
-	if (page_num != pages_no) {
+	if (page_num != (long)pages_no) {
 		tloge("get page phy addr failed\n");
 		if (page_num > 0)
-			release_pages(pages, page_num);
+			release_pages(pages, (int)page_num);
 		vfree(pages);
 		return -EFAULT;
 	}

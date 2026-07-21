@@ -26,15 +26,6 @@
 #define RETRY_MAX_COUNT 100
 #define COMPAT_LEVEL_RETRY_SLEEP 10
 
-struct os_version {
-	uint32_t magic;
-	uint32_t major_version;
-	uint32_t minor_version;
-	uint32_t reserved[8];
-	uint32_t feature_ccos : 1;
-	uint32_t feature_reserved : 31;
-};
-
 static bool g_ccos_flag = false;
 
 int32_t check_teeos_compat_level(const uint32_t *buffer, uint32_t size)
@@ -44,7 +35,7 @@ int32_t check_teeos_compat_level(const uint32_t *buffer, uint32_t size)
 	struct os_version *version = NULL;
 	uint32_t retry_count = 0;
 
-	if (!buffer || size != COMPAT_LEVEL_BUF_LEN) {
+	if (!buffer || size != sizeof(struct os_version)) {
 		tloge("check teeos compat level failed, invalid param\n");
 		return -EINVAL;
 	}

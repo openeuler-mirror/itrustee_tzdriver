@@ -35,6 +35,7 @@
 #include <linux/thread_info.h>
 #include <linux/highmem.h>
 #include <linux/mm.h>
+#include <linux/freezer.h>
 #if (KERNEL_VERSION(4, 14, 0) <= LINUX_VERSION_CODE)
 #include <linux/sched/mm.h>
 #include <linux/sched/signal.h>
@@ -68,18 +69,30 @@ DEFINE_MUTEX(g_service_list_lock);
 static int lock_interruptible(struct mutex *m)
 {
 	int ret;
+	if (!m)
+		return -1;
 
-	do {
+	while (true) {
 		ret = mutex_lock_interruptible(m);
-		if (ret != 0) {
+		/* signal */
+		if (ret == -EINTR) {
+			/* kill signal */
 			if (sigkill_pending(current))
 				return ret;
-			tloge("signal try relock ret %d", ret);
-			continue;
-		}
-	} while (0);
 
-	return 0;
+			/* other signal or freezer */
+			clear_thread_flag(TIF_SIGPENDING);
+#if (KERNEL_VERSION(6, 6, 0) <= LINUX_VERSION_CODE)
+			schedule();
+#else
+			freezable_schedule();
+#endif
+			tlogd("receive other signal or freezer, try relock");
+			continue;
+		} else {
+			return ret;
+		}
+	}
 }
 
 void init_srvc_list(void)

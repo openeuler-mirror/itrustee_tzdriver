@@ -2071,8 +2071,7 @@ int parse_params_from_tee(void)
 	}
 
 	buffer = (void *)(g_cmd_data->in);
-	ret = check_teeos_compat_level((uint32_t *)buffer,
-		COMPAT_LEVEL_BUF_LEN);
+	ret = check_teeos_compat_level((uint32_t *)buffer, sizeof(struct os_version));
 	if (ret != 0) {
 		tloge("check teeos compatibility failed\n");
 		return ret;
@@ -2084,6 +2083,14 @@ int parse_params_from_tee(void)
 		return ret;
 	}
 	return 0;
+}
+
+static void free_g_cmd_data(void)
+{
+	if (g_reserved_cmd_buffer)
+		iounmap((void __iomem *)g_cmd_data);
+	else
+		free_cmd_mem((uint64_t)(uintptr_t)g_cmd_data);
 }
 
 int smc_context_init(const struct device *class_dev)
@@ -2124,7 +2131,7 @@ free_siq_worker:
 	kthread_stop(g_siq_thread);
 	g_siq_thread = NULL;
 free_mem:
-	free_cmd_mem((uint64_t)(uintptr_t)g_cmd_data);
+	free_g_cmd_data();
 	g_cmd_data = NULL;
 	return ret;
 }
@@ -2162,10 +2169,7 @@ void svc_thread_release(void)
 void free_smc_data(void)
 {
 	struct pending_entry *pe = NULL, *temp = NULL;
-	if (g_reserved_cmd_buffer)
-		iounmap((void __iomem *)g_cmd_data);
-	else
-		free_cmd_mem((uint64_t)(uintptr_t)g_cmd_data);
+	free_g_cmd_data();
 	smc_wakeup_broadcast();
 	svc_thread_release();
 	if (!IS_ERR_OR_NULL(g_siq_thread)) {
