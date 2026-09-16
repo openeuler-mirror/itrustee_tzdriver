@@ -34,7 +34,7 @@ struct os_version {
  * this version number MAJOR.MINOR is used
  * to identify the compatibility of tzdriver and teeos
  */
-#define TEEOS_COMPAT_LEVEL_MAJOR 7
+#define TEEOS_COMPAT_LEVEL_MAJOR 8
 #define TEEOS_COMPAT_LEVEL_MINOR 0
 
 #define TZDRIVER_LEVEL_MAJOR_SELF 3
