@@ -1585,6 +1585,7 @@ static void clean_smc_resrc(struct cmd_reuse_info info,
 
 static DEFINE_MUTEX(g_abort_cmd_lock);
 static bool g_abort_cmd_enabled = true;
+#define ABORT_DISABLED_SLEEP_MSEC 1000
 
 void set_abort_cmd_enabled(bool enabled)
 {
@@ -1631,7 +1632,7 @@ static enum smc_ops_exit process_abort_cmd(int index, const struct pending_entry
 {
 	(void)pe;
 	if (!get_abort_cmd_enabled()) {
-		tlogi("abort_cmd is disabled, skipping\n");
+		msleep(ABORT_DISABLED_SLEEP_MSEC);
 		return SMC_OPS_SCHEDTO;
 	}
 	if (set_abort_cmd(index) == 0)
