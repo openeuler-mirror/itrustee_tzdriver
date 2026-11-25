@@ -710,7 +710,7 @@ static void restore_cpu(struct cpumask *old_mask)
 
 static bool is_ready_to_kill(bool need_kill, uint32_t cmd_id, bool skip_kill)
 {
-#ifdef LATE_KILL_WHEN_TA_LOAD
+#ifdef CONFIG_LATE_KILL_WHEN_TA_LOAD
     if (skip_kill) {
         return false;
     }
@@ -1557,7 +1557,7 @@ static int init_for_smc_send(struct tc_ns_smc_cmd *in,
 static bool is_ca_killed(int cmd_index, bool skip_kill)
 {
 	(void)cmd_index;
-#ifdef LATE_KILL_WHEN_TA_LOAD
+#ifdef CONFIG_LATE_KILL_WHEN_TA_LOAD
 	if (skip_kill) {
 		return false;
 	}
